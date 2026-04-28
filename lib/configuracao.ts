@@ -8,10 +8,10 @@ export const CONFIG = {
   MAX_MEDICOS_SIMULTANEOS: 2,
 
   /** Intervalo de polling do frontend para /api/painel (ms). */
-  POLLING_MS: 10_000,
+  POLLING_MS: 5_000,
 
   /** TTL do cache do servidor para a chamada à ProDoctor (ms). */
-  CACHE_PAINEL_MS: 10_000,
+  CACHE_PAINEL_MS: 5_000,
 
   /**
    * TTL do cache de dados detalhados do paciente (idade).
