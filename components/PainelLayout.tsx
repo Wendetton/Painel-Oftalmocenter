@@ -3,11 +3,13 @@
 /**
  * Layout compartilhado entre os 3 painéis (Recepção, Sala de Exames,
  * Consultório). Concentra:
- * - Header com título + métricas + seletor de médicos.
+ * - Header em UMA linha só: título à esquerda, métricas + seletor compacto à direita.
  * - Container de colunas (children).
  * - Rodapé fixo de status.
  *
- * Os 3 painéis vão usar este shell e variar só o conteúdo das colunas.
+ * O seletor de médicos foi colapsado em um botão compacto (ícone +
+ * apelidos + chevron) para liberar a linha que antes era dele inteiro
+ * — agora cabe mais card na tela útil.
  */
 
 import type { ReactNode } from "react";
@@ -47,25 +49,27 @@ export default function PainelLayout({
 }: Props) {
   return (
     <div className="min-h-screen bg-slate-50 pb-12">
-      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-6 py-4 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl flex-col gap-3">
-          <div className="flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <h1 className="text-3xl font-semibold text-slate-900">{titulo}</h1>
-              {subtitulo && (
-                <p className="text-sm text-slate-500">{subtitulo}</p>
-              )}
-            </div>
+      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-6 py-3 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-6 gap-y-2">
+          <div className="min-w-0">
+            <h1 className="truncate text-2xl font-semibold text-slate-900">
+              {titulo}
+            </h1>
+            {subtitulo && (
+              <p className="truncate text-xs text-slate-500">{subtitulo}</p>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-4">
             <MetricasDoDia
               metricas={metricas}
               rotuloMetricaCentral={rotuloMetricaCentral}
             />
+            <SeletorMedicos
+              selecionados={selecionados}
+              onAlternar={onAlternar}
+              noLimite={noLimite}
+            />
           </div>
-          <SeletorMedicos
-            selecionados={selecionados}
-            onAlternar={onAlternar}
-            noLimite={noLimite}
-          />
         </div>
       </header>
 
