@@ -14,7 +14,7 @@
 
 import type { ReactNode } from "react";
 
-import MetricasDoDia from "./MetricasDoDia";
+import MetricasDoDia, { type MetricaCentral } from "./MetricasDoDia";
 import RodapeStatus from "./RodapeStatus";
 import SeletorMedicos from "./SeletorMedicos";
 
@@ -24,7 +24,8 @@ interface Props {
   titulo: string;
   subtitulo?: string;
   metricas: MetricasDia;
-  rotuloMetricaCentral?: string;
+  /** Override da métrica central (ex.: Examinados em /exames). */
+  metricaCentral?: MetricaCentral;
   selecionados: number[];
   onAlternar: (codigo: number) => void;
   noLimite: (codigo: number) => boolean;
@@ -38,7 +39,7 @@ export default function PainelLayout({
   titulo,
   subtitulo,
   metricas,
-  rotuloMetricaCentral,
+  metricaCentral,
   selecionados,
   onAlternar,
   noLimite,
@@ -60,10 +61,7 @@ export default function PainelLayout({
             )}
           </div>
           <div className="flex flex-wrap items-center gap-4">
-            <MetricasDoDia
-              metricas={metricas}
-              rotuloMetricaCentral={rotuloMetricaCentral}
-            />
+            <MetricasDoDia metricas={metricas} metricaCentral={metricaCentral} />
             <SeletorMedicos
               selecionados={selecionados}
               onAlternar={onAlternar}

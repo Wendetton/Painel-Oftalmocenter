@@ -1,19 +1,19 @@
 "use client";
 
 /**
- * Painel da Recepção — Fase 3 (visual completo).
+ * Painel da Sala de Exames — Fase 4 (PLANEJAMENTO seção 4.5).
  *
- * Layout (PLANEJAMENTO seção 4.4):
- *   3 colunas:
- *     1. Em recepção (vermelho) — pacientes em compareceu puro
- *     2. Em dilatação (roxo) — compartilhada com Sala de Exames
- *     3. Próximos a chegar (cinza, sem cronômetro) — agendamentos do dia
+ * Layout: 3 colunas verticais
+ *   1. Em exames (amarelo) — pacientes em SALA_EXAMES.
+ *   2. Em dilatação (roxo, compartilhada com Recepção) — pacientes em
+ *      DILATAÇÃO. A equipe de exames também precisa enxergar quem está
+ *      dilatando para chamar de volta na hora certa.
+ *   3. Aguardando vir (cinza) — pacientes em RECEPÇÃO. Estão na ficha mas
+ *      em breve vão entrar na sala de exames; útil pra equipe se preparar.
  *
- * Header com título + métricas do dia + seletor de médicos.
- * Rodapé fixo com status da conexão e contagem regressiva.
+ * Métrica central: "Examinados" (quem já passou pela sala hoje).
  *
- * Cards reordenados em cada coluna por severidade (cards em alerta no topo)
- * e, no caso de empate, por horário.
+ * Reusa os componentes da Fase 3: PainelLayout, CardPaciente, hooks.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -25,14 +25,12 @@ import { usePainel } from "@/hooks/usePainel";
 import { calcularMetricasDia } from "@/lib/calcularMetricas";
 import type { CardPaciente as CardData, EstagioPaciente } from "@/lib/tipos";
 
-export default function RecepcaoPage() {
+export default function ExamesPage() {
   const { codigos, hidratado, alternar, noLimite } = useMedicosSelecionados();
   const { cards, atualizadoEm, fonteOnline, ultimoErro, carregandoInicial } =
     usePainel(codigos);
 
-  // Re-render leve a cada 5s para que a ordenação por severidade reaja
-  // mesmo quando o painel não recebeu novo dado (cards podem migrar de
-  // amarelo para vermelho só pelo tempo passando).
+  // Tick para reordenação periódica por severidade do cronômetro.
   const [tickOrdenacao, setTickOrdenacao] = useState(0);
   useEffect(() => {
     const t = setInterval(() => setTickOrdenacao((v) => v + 1), 5_000);
@@ -41,15 +39,11 @@ export default function RecepcaoPage() {
 
   const colunas = useMemo(() => {
     const agora = new Date();
-    const recepcao = filtrarPorEstagio(cards, "RECEPCAO");
-    const dilatacao = filtrarPorEstagio(cards, "DILATACAO");
-    const proximos = filtrarPorEstagio(cards, "AGENDADO");
     return {
-      recepcao: ordenarPorSeveridade(recepcao, agora),
-      dilatacao: ordenarPorSeveridade(dilatacao, agora),
-      proximos: ordenarPorHorario(proximos),
+      exames: ordenarPorSeveridade(filtrar(cards, "SALA_EXAMES"), agora),
+      dilatacao: ordenarPorSeveridade(filtrar(cards, "DILATACAO"), agora),
+      aguardando: ordenarPorHorario(filtrar(cards, "RECEPCAO")),
     };
-    // tickOrdenacao força reavaliação periódica.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cards, tickOrdenacao]);
 
@@ -57,9 +51,10 @@ export default function RecepcaoPage() {
 
   return (
     <PainelLayout
-      titulo="Recepção"
+      titulo="Sala de exames"
       subtitulo="Painel ao vivo · Oftalmocenter"
       metricas={metricas}
+      metricaCentral={{ rotulo: "Examinados", valor: metricas.examinados }}
       selecionados={codigos}
       onAlternar={alternar}
       noLimite={noLimite}
@@ -68,20 +63,27 @@ export default function RecepcaoPage() {
       atualizadoEm={atualizadoEm}
     >
       {!hidratado ? (
-        <CarregandoInicial mensagem="Carregando preferências…" />
+        <Status mensagem="Carregando preferências…" />
       ) : codigos.length === 0 ? (
         <EstadoVazio />
       ) : carregandoInicial ? (
-        <CarregandoInicial mensagem="Buscando agendamentos do dia…" />
+        <Status mensagem="Buscando agendamentos do dia…" />
       ) : (
         <div className="grid gap-5 lg:grid-cols-3">
-          <Coluna titulo="Em recepção" cards={colunas.recepcao} mensagemVazio="Ninguém em recepção agora." />
-          <Coluna titulo="Em dilatação" cards={colunas.dilatacao} mensagemVazio="Ninguém dilatando agora." />
           <Coluna
-            titulo="Próximos a chegar"
-            cards={colunas.proximos}
-            mensagemVazio="Nada agendado a partir deste momento."
-            destacarHorario
+            titulo="Em exames"
+            cards={colunas.exames}
+            mensagemVazio="Nenhum paciente na sala de exames."
+          />
+          <Coluna
+            titulo="Em dilatação"
+            cards={colunas.dilatacao}
+            mensagemVazio="Ninguém dilatando agora."
+          />
+          <Coluna
+            titulo="Aguardando vir"
+            cards={colunas.aguardando}
+            mensagemVazio="Recepção está vazia."
           />
         </div>
       )}
@@ -93,12 +95,10 @@ function Coluna({
   titulo,
   cards,
   mensagemVazio,
-  destacarHorario = false,
 }: {
   titulo: string;
   cards: CardData[];
   mensagemVazio: string;
-  destacarHorario?: boolean;
 }) {
   return (
     <section className="flex flex-col gap-3">
@@ -116,11 +116,7 @@ function Coluna({
       ) : (
         <div className="flex flex-col gap-2">
           {cards.map((card) => (
-            <CardPaciente
-              key={card.agendamentoId}
-              card={card}
-              subestado={destacarHorario ? null : null}
-            />
+            <CardPaciente key={card.agendamentoId} card={card} />
           ))}
         </div>
       )}
@@ -131,7 +127,9 @@ function Coluna({
 function EstadoVazio() {
   return (
     <div className="rounded-xl border border-dashed border-slate-300 bg-white p-12 text-center text-slate-600">
-      <p className="text-base">Selecione até 2 médicos no topo para começar.</p>
+      <p className="text-base">
+        Selecione até 2 médicos no botão do canto superior direito.
+      </p>
       <p className="mt-2 text-xs text-slate-500">
         A escolha fica salva neste navegador. Cada TV pode ter uma dupla
         diferente.
@@ -140,7 +138,7 @@ function EstadoVazio() {
   );
 }
 
-function CarregandoInicial({ mensagem }: { mensagem: string }) {
+function Status({ mensagem }: { mensagem: string }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-12 text-center text-slate-500">
       <p>{mensagem}</p>
@@ -148,15 +146,11 @@ function CarregandoInicial({ mensagem }: { mensagem: string }) {
   );
 }
 
-function filtrarPorEstagio(
-  cards: CardData[],
-  estagio: EstagioPaciente,
-): CardData[] {
+function filtrar(cards: CardData[], estagio: EstagioPaciente): CardData[] {
   return cards.filter((c) => c.estagio === estagio);
 }
 
 function ordenarPorSeveridade(cards: CardData[], agora: Date): CardData[] {
-  // Severidade DESC (alertas no topo); empate por horário ASC.
   return [...cards].sort((a, b) => {
     const sa = severidadeCard(a, agora);
     const sb = severidadeCard(b, agora);

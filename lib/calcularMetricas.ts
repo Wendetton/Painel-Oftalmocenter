@@ -19,6 +19,12 @@ export interface MetricasDia {
   total: number;
   /** Pacientes que já saíram do fluxo com sucesso. */
   atendidos: number;
+  /**
+   * Pacientes que já passaram da etapa de exames hoje. Inclui quem está
+   * agora em PRONTO_MEDICO, DILATACAO e ATENDIDO — todos esses estados só
+   * são alcançados depois que a equipe da Sala de Exames libera o paciente.
+   */
+  examinados: number;
   /** Pacientes ainda em algum estágio ativo (recepção, exames, dilatação, médico). */
   emAndamento: number;
   /** Tempo médio de permanência (em minutos) dos atendidos hoje, ou null se nenhum atendido ainda. */
@@ -28,6 +34,7 @@ export interface MetricasDia {
 export function calcularMetricasDia(cards: CardPaciente[]): MetricasDia {
   let total = 0;
   let atendidos = 0;
+  let examinados = 0;
   let emAndamento = 0;
   let somaPermanenciaMin = 0;
   let amostrasPermanencia = 0;
@@ -40,16 +47,21 @@ export function calcularMetricasDia(cards: CardPaciente[]): MetricasDia {
 
     if (card.estagio === "ATENDIDO") {
       atendidos += 1;
+      examinados += 1;
       const permanencia = diferencaMinutos(card.horaCompareceu, card.horaAtendido);
       if (permanencia !== null && permanencia >= 0) {
         somaPermanenciaMin += permanencia;
         amostrasPermanencia += 1;
       }
     } else if (
-      card.estagio === "RECEPCAO" ||
-      card.estagio === "SALA_EXAMES" ||
       card.estagio === "PRONTO_MEDICO" ||
       card.estagio === "DILATACAO"
+    ) {
+      examinados += 1;
+      emAndamento += 1;
+    } else if (
+      card.estagio === "RECEPCAO" ||
+      card.estagio === "SALA_EXAMES"
     ) {
       emAndamento += 1;
     }
@@ -58,6 +70,7 @@ export function calcularMetricasDia(cards: CardPaciente[]): MetricasDia {
   return {
     total,
     atendidos,
+    examinados,
     emAndamento,
     tempoMedioPermanenciaMin:
       amostrasPermanencia > 0
