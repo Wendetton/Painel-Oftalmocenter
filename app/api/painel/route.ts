@@ -5,17 +5,8 @@ import {
   buscarAgendamentosDoDia,
   buscarIdadePaciente,
 } from "@/lib/prodoctor-client";
-import {
-  horaSPParaTimestampMs,
-  limparAusentes,
-  registrarEstagio,
-} from "@/lib/rastreadorEstagio";
-import type {
-  CardPaciente,
-  EstagioPaciente,
-  RespostaPainel,
-  TipoAgendamento,
-} from "@/lib/tipos";
+import { limparAusentes, registrarEstagio } from "@/lib/rastreadorEstagio";
+import type { CardPaciente, RespostaPainel, TipoAgendamento } from "@/lib/tipos";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -51,37 +42,6 @@ const FLAGS_VAZIAS = {
   atendido: false,
   faltou: false,
 } as const;
-
-/**
- * Para cada estágio, devolve o timestamp "real" mais preciso que a API
- * ProDoctor entrega (ou null quando ela não tem essa informação). Esse
- * timestamp é usado como fallback inicial pelo rastreador quando vê o
- * agendamento pela primeira vez (cold start de instância serverless).
- */
-function fallbackInicialDoEstagio(
-  estagio: EstagioPaciente,
-  horaCompareceu: string | null,
-  horaAtendimento: string | null,
-): number | null {
-  switch (estagio) {
-    case "RECEPCAO":
-      return horaSPParaTimestampMs(horaCompareceu);
-    case "PRONTO_MEDICO":
-      return (
-        horaSPParaTimestampMs(horaAtendimento) ??
-        horaSPParaTimestampMs(horaCompareceu)
-      );
-    case "SALA_EXAMES":
-    case "DILATACAO":
-      // Sem timestamp específico na API. O rastreador usa "agora" como
-      // fallback e se autocorrige na próxima transição.
-      return null;
-    case "ATENDIDO":
-    case "AGENDADO":
-    case "FALTOU":
-      return null;
-  }
-}
 
 export async function GET(req: Request): Promise<NextResponse<RespostaPainel>> {
   const codigosMedicos = parseMedicos(req);
@@ -127,16 +87,13 @@ export async function GET(req: Request): Promise<NextResponse<RespostaPainel>> {
       const agendamentoId = `${ag.usuario?.codigo ?? "x"}-${ag.data ?? "x"}-${ag.hora ?? "x"}-${codigoPaciente ?? "x"}`;
       idsAtivos.add(agendamentoId);
 
-      // Calcula a hora de entrada no estágio atual. AGENDADO e FALTOU não
-      // têm cronômetro, então não passa pelo rastreador.
+      // AGENDADO e FALTOU não têm cronômetro — não passam pelo rastreador.
+      // Os demais estágios pedem ao rastreador o instante em que o servidor
+      // primeiro viu o card naquele estágio. Esse timestamp zera a cada
+      // transição e é uniforme para todos os 4 estágios com cronômetro.
       let estagioDesdeEm: string | null = null;
       if (estagio !== "AGENDADO" && estagio !== "FALTOU") {
-        const fallback = fallbackInicialDoEstagio(
-          estagio,
-          estado?.horaCompareceu ?? null,
-          estado?.horaAtendimento ?? null,
-        );
-        const ts = registrarEstagio(agendamentoId, estagio, fallback);
+        const ts = registrarEstagio(agendamentoId, estagio);
         estagioDesdeEm = new Date(ts).toISOString();
       }
 
