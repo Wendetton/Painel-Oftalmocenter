@@ -1,38 +1,38 @@
 "use client";
 
 /**
- * Card de paciente conforme PLANEJAMENTO seção 4.2 (Anatomia do card):
+ * Card de paciente conforme PLANEJAMENTO seção 4.2 (Anatomia do card),
+ * com os ajustes solicitados pelo Fernando após a Fase 3:
  *
  * 1. Barra colorida lateral esquerda (8 px) na cor do estágio.
- * 2. Etiqueta do estágio (texto pequeno em maiúsculas).
- * 3. Nome do paciente + idade ("Maria Silva · 58").
+ * 2. Cabeçalho com etiqueta do estágio à esquerda + ícones de tipo
+ *    (consulta/retorno/exame) à direita, ao estilo ProDoctor.
+ * 3. Nome do paciente em destaque + idade ao lado.
  * 4. Linha de contexto: horário · médico · convênio.
- * 5. Faixa do complemento (quando existe), com fundo translúcido.
+ * 5. Faixa do complemento (quando existe).
  * 6. Linha inferior: subestado à esquerda + cronômetro tabular à direita.
+ *
+ * O cronômetro reseta ao trocar de estágio porque usa `estagioDesdeEm`,
+ * timestamp gerado pelo rastreador no servidor a cada transição.
  *
  * Princípio 3: tempo é a métrica visual primária — o cronômetro é o
  * elemento maior da linha inferior. Nome é segundo. Convênio é terciário.
  */
 
-import Cronometro, { nivelDoCronometro } from "./Cronometro";
+import Cronometro, { minutosDesdeIso, nivelDoCronometro } from "./Cronometro";
+import IconeTipoAgendamento from "./IconeTipoAgendamento";
 
 import { CORES_POR_ESTAGIO } from "@/lib/cores";
-import { minutosDesde } from "@/lib/calcularMetricas";
 import type { CardPaciente as CardPacienteData, EstagioPaciente } from "@/lib/tipos";
 
 interface Props {
   card: CardPacienteData;
-  /**
-   * Subtexto opcional ("veio dos exames", "pós-dilatação", etc.).
-   * Por enquanto não calculamos automaticamente — fica para Fase 4 quando o
-   * Consultório precisar mostrar a origem.
-   */
+  /** Subtexto opcional (ex.: "veio dos exames", para Fase 4 do Consultório). */
   subestado?: string | null;
 }
 
 export default function CardPaciente({ card, subestado = null }: Props) {
   const cores = CORES_POR_ESTAGIO[card.estagio];
-  const horaBase = horaBaseDoEstagio(card);
 
   return (
     <article
@@ -40,12 +40,15 @@ export default function CardPaciente({ card, subestado = null }: Props) {
       style={{ borderLeft: `8px solid ${cores.borda}` }}
     >
       <div className="flex flex-1 flex-col gap-1 px-4 py-3">
-        <p
-          className="text-[11px] font-semibold uppercase tracking-wider"
-          style={{ color: cores.borda }}
-        >
-          {cores.rotulo}
-        </p>
+        <div className="flex items-center justify-between gap-2">
+          <p
+            className="text-[11px] font-semibold uppercase tracking-wider"
+            style={{ color: cores.borda }}
+          >
+            {cores.rotulo}
+          </p>
+          <IconeTipoAgendamento tipo={card.tipoAgendamento} size={22} />
+        </div>
 
         <h3 className="text-xl font-medium leading-tight text-slate-900">
           {card.paciente.nome}
@@ -85,7 +88,7 @@ export default function CardPaciente({ card, subestado = null }: Props) {
               {card.horarioAgendamento ?? "—"}
             </span>
           ) : (
-            <Cronometro horaInicio={horaBase} className="text-2xl" />
+            <Cronometro desdeEm={card.estagioDesdeEm} className="text-2xl" />
           )}
         </div>
       </div>
@@ -94,31 +97,13 @@ export default function CardPaciente({ card, subestado = null }: Props) {
 }
 
 /**
- * Define qual hora usar como referência do cronômetro de cada estágio.
- * Critério aproximado da Fase 3 — pode ser refinado na Fase 5 quando
- * houver dados reais para calibrar.
+ * Helper exportado para reordenar listas: cards em alerta no topo.
+ * Usa o cronômetro do estágio atual (estagioDesdeEm) e o classifica em
+ * 4 níveis. AGENDADO/FALTOU não têm cronômetro → severidade -1.
  */
-function horaBaseDoEstagio(card: CardPacienteData): string | null {
-  switch (card.estagio) {
-    case "RECEPCAO":
-    case "SALA_EXAMES":
-    case "DILATACAO":
-      return card.horaCompareceu;
-    case "PRONTO_MEDICO":
-      // Tempo desde que ficou pronto pra médico (saiu dos exames).
-      return card.horaAtendimento ?? card.horaCompareceu;
-    case "ATENDIDO":
-      return card.horaAtendido ?? card.horaCompareceu;
-    case "AGENDADO":
-    case "FALTOU":
-      return null;
-  }
-}
-
-/** Helper exportado para reordenar listas: cards em alerta no topo. */
 export function severidadeCard(card: CardPacienteData, agora: Date): number {
-  if (card.estagio === "AGENDADO") return -1;
-  const min = minutosDesde(horaBaseDoEstagio(card), agora);
+  if (card.estagio === "AGENDADO" || card.estagio === "FALTOU") return -1;
+  const min = minutosDesdeIso(card.estagioDesdeEm, agora.getTime());
   const nivel = nivelDoCronometro(min);
   switch (nivel) {
     case "critico":

@@ -3,22 +3,22 @@
 /**
  * Cronômetro vivo do tempo no estágio atual.
  *
- * Recebe a hora de início (HH:mm) e atualiza o display a cada 1s, mudando
- * o estilo conforme atinge as faixas de tempo definidas no PLANEJAMENTO
- * seção 4.3:
+ * Recebe um timestamp ISO de quando o paciente entrou no estágio atual
+ * (calculado pelo rastreador no servidor) e atualiza o display a cada 1s.
  *
+ * O timestamp ZERA toda vez que o paciente troca de estágio — ou seja, o
+ * cronômetro mostra "tempo nesse estágio", não "tempo na clínica".
+ *
+ * 4 níveis visuais conforme tempo (PLANEJAMENTO seção 4.3):
  *   < 15 min  → discreto
  *   15-25 min → negrito, cor mais forte
- *   25-40 min → indica preocupação (cor laranja)
+ *   25-40 min → preocupação (laranja)
  *   > 40 min  → alerta (vermelho + ícone)
  *
- * Os limiares são iniciais e devem ser calibrados na Fase 5 conforme o
- * uso real da equipe.
+ * Limiares iniciais — calibrar na Fase 5 conforme uso real da equipe.
  */
 
 import { useEffect, useState } from "react";
-
-import { minutosDesde } from "@/lib/calcularMetricas";
 
 const LIMIAR_ATENCAO_MIN = 15;
 const LIMIAR_ALERTA_MIN = 25;
@@ -27,8 +27,8 @@ const LIMIAR_CRITICO_MIN = 40;
 export type NivelCronometro = "ok" | "atencao" | "alerta" | "critico";
 
 interface Props {
-  horaInicio: string | null;
-  /** Cor base do estágio (para calcular intensidade visual do nível "ok"). */
+  /** Timestamp ISO de quando o paciente entrou no estágio atual. */
+  desdeEm: string | null;
   className?: string;
 }
 
@@ -47,16 +47,16 @@ const ESTILOS_POR_NIVEL: Record<NivelCronometro, string> = {
   critico: "text-red-700 font-bold",
 };
 
-export default function Cronometro({ horaInicio, className = "" }: Props) {
-  const [agora, setAgora] = useState(() => new Date());
+export default function Cronometro({ desdeEm, className = "" }: Props) {
+  const [agora, setAgora] = useState(() => Date.now());
 
   useEffect(() => {
-    const tick = () => setAgora(new Date());
+    const tick = () => setAgora(Date.now());
     const timer = setInterval(tick, 1_000);
     return () => clearInterval(timer);
   }, []);
 
-  const minutos = minutosDesde(horaInicio, agora);
+  const minutos = minutosDesdeIso(desdeEm, agora);
   const nivel = nivelDoCronometro(minutos);
   const texto = formatarTempo(minutos);
 
@@ -66,7 +66,7 @@ export default function Cronometro({ horaInicio, className = "" }: Props) {
       title={
         minutos === null
           ? "Sem horário registrado"
-          : `${Math.round(minutos)} minutos no estágio`
+          : `${Math.round(minutos)} minutos no estágio atual`
       }
     >
       {nivel === "critico" && (
@@ -77,6 +77,14 @@ export default function Cronometro({ horaInicio, className = "" }: Props) {
       {texto}
     </span>
   );
+}
+
+export function minutosDesdeIso(iso: string | null, agora: number): number | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return null;
+  const diffMs = agora - t;
+  return diffMs < 0 ? 0 : diffMs / (60 * 1000);
 }
 
 function formatarTempo(minutos: number | null): string {

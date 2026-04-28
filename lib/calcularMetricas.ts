@@ -87,37 +87,3 @@ function diferencaMinutos(inicio: string | null, fim: string | null): number | n
   if (a === null || b === null) return null;
   return b - a;
 }
-
-/**
- * Calcula minutos decorridos desde uma hora do dia atual (HH:mm[:ss])
- * até "agora" no fuso de São Paulo. Retorna null se a string for inválida.
- *
- * Usado pelo Cronometro para saber há quanto tempo o paciente está no
- * estágio atual.
- */
-export function minutosDesde(horaInicio: string | null, agora: Date): number | null {
-  const inicioMin = horaParaMinutos(horaInicio);
-  if (inicioMin === null) return null;
-
-  const fmt = new Intl.DateTimeFormat("pt-BR", {
-    timeZone: "America/Sao_Paulo",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  });
-  const partes = fmt.formatToParts(agora);
-  const hh = Number(partes.find((p) => p.type === "hour")?.value ?? "NaN");
-  const mm = Number(partes.find((p) => p.type === "minute")?.value ?? "NaN");
-  const ss = Number(partes.find((p) => p.type === "second")?.value ?? "NaN");
-  if (!Number.isFinite(hh) || !Number.isFinite(mm) || !Number.isFinite(ss)) {
-    return null;
-  }
-  const agoraSegundosNoDia = hh * 3600 + mm * 60 + ss;
-  const inicioSegundos = inicioMin * 60;
-
-  // Se a hora de início for "futura" (> agora), provavelmente é dado
-  // estranho — devolvemos 0 em vez de número negativo.
-  const diff = agoraSegundosNoDia - inicioSegundos;
-  return diff < 0 ? 0 : diff / 60;
-}
