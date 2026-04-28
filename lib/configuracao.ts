@@ -30,6 +30,34 @@ export const CONFIG = {
 } as const;
 
 /**
+ * Apelidos curtos dos médicos da clínica, exibidos nos cards do painel
+ * para manter a tela limpa (TV é vista de longe e nome completo polui).
+ * Indexado pelo `codigo` do médico no ProDoctor.
+ *
+ * Para adicionar/alterar um médico, basta editar este mapa. Códigos que
+ * não estiverem aqui caem no nome completo retornado pela API — então o
+ * painel continua funcionando se um médico novo entrar antes de o mapa
+ * ser atualizado.
+ */
+export const APELIDOS_MEDICOS: Record<number, string> = {
+  2: "Dr Paulo",
+  3: "Dra Lilian",
+  4: "Dr Fernando",
+};
+
+/**
+ * Devolve o apelido curto do médico se houver, senão o nome completo.
+ * Usado nos cards (ver components/CardPaciente.tsx).
+ */
+export function nomeMedicoCurto(
+  codigo: number | null,
+  fallback: string,
+): string {
+  if (codigo === null) return fallback;
+  return APELIDOS_MEDICOS[codigo] ?? fallback;
+}
+
+/**
  * Lê uma variável de ambiente obrigatória. Lança erro se ausente.
  * Em rotas Next.js, falha cedo é melhor do que enviar request com chave undefined.
  */
