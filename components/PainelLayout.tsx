@@ -14,6 +14,7 @@
 
 import type { ReactNode } from "react";
 
+import BotaoBeep from "./BotaoBeep";
 import MetricasDoDia, { type MetricaCentral } from "./MetricasDoDia";
 import RodapeStatus from "./RodapeStatus";
 import SeletorMedicos from "./SeletorMedicos";
@@ -32,6 +33,9 @@ interface Props {
   fonteOnline: boolean;
   ultimoErro: string | null;
   atualizadoEm: string | null;
+  /** Estado e toggle do beep — vem do hook usePreferenciaBeep no nivel da pagina. */
+  beepLigado: boolean;
+  onAlternarBeep: () => void;
   children: ReactNode;
 }
 
@@ -46,6 +50,8 @@ export default function PainelLayout({
   fonteOnline,
   ultimoErro,
   atualizadoEm,
+  beepLigado,
+  onAlternarBeep,
   children,
 }: Props) {
   return (
@@ -60,8 +66,9 @@ export default function PainelLayout({
               <p className="truncate text-xs text-slate-500">{subtitulo}</p>
             )}
           </div>
-          <div className="flex flex-wrap items-center gap-4">
+          <div className="flex flex-wrap items-center gap-3">
             <MetricasDoDia metricas={metricas} metricaCentral={metricaCentral} />
+            <BotaoBeep ligado={beepLigado} onAlternar={onAlternarBeep} />
             <SeletorMedicos
               selecionados={selecionados}
               onAlternar={onAlternar}
