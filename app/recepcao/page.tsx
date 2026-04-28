@@ -20,15 +20,26 @@ import { useEffect, useMemo, useState } from "react";
 
 import CardPaciente, { severidadeCard } from "@/components/CardPaciente";
 import PainelLayout from "@/components/PainelLayout";
+import { useBeepEntradaEstagio } from "@/hooks/useBeepEntradaEstagio";
 import { useMedicosSelecionados } from "@/hooks/useMedicosSelecionados";
 import { usePainel } from "@/hooks/usePainel";
+import { usePreferenciaBeep } from "@/hooks/usePreferenciaBeep";
 import { calcularMetricasDia } from "@/lib/calcularMetricas";
 import type { CardPaciente as CardData, EstagioPaciente } from "@/lib/tipos";
+
+const ESTAGIOS_BEEP_RECEPCAO: EstagioPaciente[] = ["RECEPCAO", "DILATACAO"];
 
 export default function RecepcaoPage() {
   const { codigos, hidratado, alternar, noLimite } = useMedicosSelecionados();
   const { cards, atualizadoEm, fonteOnline, ultimoErro, carregandoInicial } =
     usePainel(codigos);
+  const { ligado: beepLigado, alternar: alternarBeep } = usePreferenciaBeep();
+
+  useBeepEntradaEstagio({
+    cards,
+    estagiosAlvo: ESTAGIOS_BEEP_RECEPCAO,
+    habilitado: beepLigado,
+  });
 
   // Re-render leve a cada 5s para que a ordenação por severidade reaja
   // mesmo quando o painel não recebeu novo dado (cards podem migrar de
@@ -66,6 +77,8 @@ export default function RecepcaoPage() {
       fonteOnline={fonteOnline}
       ultimoErro={ultimoErro}
       atualizadoEm={atualizadoEm}
+      beepLigado={beepLigado}
+      onAlternarBeep={alternarBeep}
     >
       {!hidratado ? (
         <CarregandoInicial mensagem="Carregando preferências…" />

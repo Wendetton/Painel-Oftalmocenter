@@ -20,16 +20,27 @@ import { useEffect, useMemo, useState } from "react";
 
 import CardPaciente, { severidadeCard } from "@/components/CardPaciente";
 import PainelLayout from "@/components/PainelLayout";
+import { useBeepEntradaEstagio } from "@/hooks/useBeepEntradaEstagio";
 import { useMedicosSelecionados } from "@/hooks/useMedicosSelecionados";
 import { usePainel } from "@/hooks/usePainel";
+import { usePreferenciaBeep } from "@/hooks/usePreferenciaBeep";
 import { calcularMetricasDia } from "@/lib/calcularMetricas";
 import { nomeMedicoCurto } from "@/lib/configuracao";
 import type { CardPaciente as CardData, EstagioPaciente } from "@/lib/tipos";
+
+const ESTAGIOS_BEEP_CONSULTORIO: EstagioPaciente[] = ["PRONTO_MEDICO"];
 
 export default function ConsultorioPage() {
   const { codigos, hidratado, alternar, noLimite } = useMedicosSelecionados();
   const { cards, atualizadoEm, fonteOnline, ultimoErro, carregandoInicial } =
     usePainel(codigos);
+  const { ligado: beepLigado, alternar: alternarBeep } = usePreferenciaBeep();
+
+  useBeepEntradaEstagio({
+    cards,
+    estagiosAlvo: ESTAGIOS_BEEP_CONSULTORIO,
+    habilitado: beepLigado,
+  });
 
   // Tick periódico para reordenação por severidade do cronômetro.
   const [tickOrdenacao, setTickOrdenacao] = useState(0);
@@ -64,6 +75,8 @@ export default function ConsultorioPage() {
       fonteOnline={fonteOnline}
       ultimoErro={ultimoErro}
       atualizadoEm={atualizadoEm}
+      beepLigado={beepLigado}
+      onAlternarBeep={alternarBeep}
     >
       {!hidratado ? (
         <Status mensagem="Carregando preferências…" />
