@@ -1,33 +1,40 @@
 "use client";
 
 /**
- * Cabeçalho com métricas do dia: Total / Atendidos / Tempo médio.
+ * Cabeçalho com métricas do dia: Total / [métrica do meio] / Tempo médio.
  * Calculadas client-side a partir da lista atual — atualizam junto com o painel.
  *
- * As 3 métricas são as que estão calculáveis sem histórico, derivadas dos
- * timestamps já vindos da API ProDoctor (PLANEJAMENTO seção 1.3).
+ * A "métrica do meio" varia por painel:
+ * - Recepção/Consultório: Atendidos
+ * - Sala de Exames: Examinados (pacientes que já passaram pela sala)
+ *
+ * O componente expõe a escolha por meio do prop `metricaCentral`.
  */
 
 import type { MetricasDia } from "@/lib/calcularMetricas";
 
-interface Props {
-  metricas: MetricasDia;
-  /**
-   * Rótulo da métrica do meio. Recepção mostra "Atendidos"; Sala de Exames
-   * vai mostrar "Examinados" na Fase 4. Por isso é parametrizado.
-   */
-  rotuloMetricaCentral?: string;
+export interface MetricaCentral {
+  rotulo: string;
+  valor: number | string;
 }
 
-export default function MetricasDoDia({
-  metricas,
-  rotuloMetricaCentral = "Atendidos",
-}: Props) {
+interface Props {
+  metricas: MetricasDia;
+  /** Sobrescreve o "Atendidos" central (ex.: Examinados em /exames). */
+  metricaCentral?: MetricaCentral;
+}
+
+export default function MetricasDoDia({ metricas, metricaCentral }: Props) {
+  const central: MetricaCentral = metricaCentral ?? {
+    rotulo: "Atendidos",
+    valor: metricas.atendidos,
+  };
+
   return (
     <dl className="flex items-stretch gap-6 text-right">
       <Metric label="Pacientes do dia" valor={metricas.total} />
       <span className="self-stretch border-l border-slate-200" />
-      <Metric label={rotuloMetricaCentral} valor={metricas.atendidos} />
+      <Metric label={central.rotulo} valor={central.valor} />
       <span className="self-stretch border-l border-slate-200" />
       <Metric
         label="Tempo médio"
