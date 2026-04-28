@@ -58,6 +58,26 @@ export interface EstadoAgendaConsulta {
   faltou: boolean;
 }
 
+/**
+ * Tipo do agendamento conforme marcações no ProDoctor (são flags
+ * combináveis — um agendamento pode ser, por exemplo, consulta + exame).
+ *
+ * O painel usa essas flags para escolher o ícone do card
+ * (PLANEJAMENTO ajustado em conversa com Fernando):
+ *   - retorno → emoji "R"
+ *   - exame   → emoji "frasco"
+ *   - consulta sem retorno nem exame → emoji "carinha"
+ *   - múltiplos → mostra todos os ícones aplicáveis.
+ */
+export interface TipoAgendamento {
+  consulta: boolean;
+  retorno: boolean;
+  exame: boolean;
+  cirurgia: boolean;
+  compromisso: boolean;
+  teleconsulta: boolean;
+}
+
 export interface AgendamentoProDoctor {
   localProDoctor: LocalProDoctorIdentificacao | null;
   usuario: MedicoProDoctor | null;
@@ -67,6 +87,7 @@ export interface AgendamentoProDoctor {
   complemento: string | null;
   estadoAgendaConsulta: EstadoAgendaConsulta | null;
   convenio: ConvenioIdentificacao | null;
+  tipoAgendamento: TipoAgendamento | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -77,6 +98,12 @@ export interface AgendamentoProDoctor {
 export interface CardPaciente {
   agendamentoId: string;
   estagio: EstagioPaciente;
+  /**
+   * Timestamp ISO de quando o paciente entrou no estágio atual.
+   * Usado pelo cronômetro do card. Reseta toda vez que o paciente
+   * troca de estágio. Pode ser null para AGENDADO/FALTOU.
+   */
+  estagioDesdeEm: string | null;
   paciente: {
     codigo: number | null;
     nome: string;
@@ -93,6 +120,7 @@ export interface CardPaciente {
   horaCompareceu: string | null;
   horaAtendimento: string | null;
   horaAtendido: string | null;
+  tipoAgendamento: TipoAgendamento | null;
 }
 
 export interface RespostaPainel {
