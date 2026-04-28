@@ -124,9 +124,34 @@ async function chamar<TResposta>(
     }
   }
 
-  throw ultimoErro instanceof Error
-    ? ultimoErro
-    : new ErroProDoctor("Falha ao chamar API ProDoctor", null, ultimoErro);
+  // Reescreve o erro acumulado para sempre incluir a URL tentada e a causa
+  // subjacente (DNS, conexão recusada, certificado, etc.). Isso é o que diz
+  // a Fernando, sem precisar olhar logs do Vercel, se a `PRODOCTOR_API_URL`
+  // está apontando para algum lugar inválido.
+  const causaTexto = formatarCausaErro(ultimoErro);
+  throw new ErroProDoctor(
+    `Falha ao chamar ${url} — ${causaTexto}`,
+    ultimoErro instanceof ErroProDoctor ? ultimoErro.status : null,
+    ultimoErro,
+  );
+}
+
+function formatarCausaErro(err: unknown): string {
+  if (err instanceof ErroProDoctor) {
+    return err.message;
+  }
+  if (err instanceof Error) {
+    // node-fetch / undici aninham a causa real (ex: ENOTFOUND) em err.cause.
+    const cause = (err as Error & { cause?: unknown }).cause;
+    const causeMsg =
+      cause instanceof Error
+        ? `${cause.name}: ${cause.message}`
+        : cause !== undefined
+          ? String(cause)
+          : null;
+    return causeMsg ? `${err.message} (causa: ${causeMsg})` : err.message;
+  }
+  return "erro desconhecido";
 }
 
 function aguardar(ms: number): Promise<void> {
