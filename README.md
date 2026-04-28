@@ -162,9 +162,39 @@ Vercel cuida de tudo.)
 
 Se algo não funcionar depois do deploy:
 
+### 1. Abra a página de diagnóstico
+
+Acesse `https://SUA-URL.vercel.app/api/diagnostico`. Ela mostra:
+- Se cada variável de ambiente está configurada (sem revelar os valores).
+- Qual URL da API ProDoctor está sendo usada efetivamente.
+- O resultado de uma sondagem rápida em 3-4 URLs candidatas do ProDoctor:
+  qualquer uma que retornar `"ok": true` é uma URL válida e pode ser
+  configurada na variável `PRODOCTOR_API_URL` do Vercel.
+
+Exemplo de saída útil:
+```json
+{
+  "sondagens": {
+    "https://api.prodoctor.net.br": {
+      "ok": false,
+      "erro": "TypeError: fetch failed",
+      "causaErro": "Error: getaddrinfo ENOTFOUND api.prodoctor.net.br"
+    },
+    "https://api.prodoctor.com.br": {
+      "ok": true,
+      "status": 200,
+      "duracaoMs": 240
+    }
+  }
+}
+```
+No exemplo acima, a URL correta seria `https://api.prodoctor.com.br` —
+basta atualizar a variável no Vercel e fazer Redeploy.
+
+### 2. Se o diagnóstico não esclarecer
+
 1. Vá em **Vercel → seu projeto → Logs** e veja a mensagem de erro.
-2. Me envie a mensagem que aparecer (ou abra a URL `/api/medicos` e me mande
-   o JSON que retornar).
+2. Me envie a mensagem (ou cole o JSON de `/api/medicos`).
 3. Não tente "consertar" pelo Vercel mexendo no código — me chame.
 
 ---
