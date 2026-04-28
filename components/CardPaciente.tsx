@@ -22,6 +22,7 @@
 import Cronometro, { minutosDesdeIso, nivelDoCronometro } from "./Cronometro";
 import IconeTipoAgendamento from "./IconeTipoAgendamento";
 
+import { nomeMedicoCurto } from "@/lib/configuracao";
 import { CORES_POR_ESTAGIO } from "@/lib/cores";
 import type { CardPaciente as CardPacienteData, EstagioPaciente } from "@/lib/tipos";
 
@@ -60,7 +61,11 @@ export default function CardPaciente({ card, subestado = null }: Props) {
         </h3>
 
         <p className="text-xs text-slate-500">
-          {[card.horarioAgendamento, card.medico.nome, card.convenio]
+          {[
+            card.horarioAgendamento,
+            nomeMedicoCurto(card.medico.codigo, card.medico.nome),
+            card.convenio,
+          ]
             .filter((p): p is string => Boolean(p))
             .join(" · ")}
         </p>
