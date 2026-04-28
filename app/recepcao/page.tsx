@@ -1,200 +1,173 @@
 "use client";
 
 /**
- * Painel da Recepção — versão Fase 2.
+ * Painel da Recepção — Fase 3 (visual completo).
  *
- * Objetivo da Fase 2 (PLANEJAMENTO seção 5): provar que o ciclo
- * "ProDoctor → /api/painel → tela com polling" funciona em tempo real.
+ * Layout (PLANEJAMENTO seção 4.4):
+ *   3 colunas:
+ *     1. Em recepção (vermelho) — pacientes em compareceu puro
+ *     2. Em dilatação (roxo) — compartilhada com Sala de Exames
+ *     3. Próximos a chegar (cinza, sem cronômetro) — agendamentos do dia
  *
- * É deliberadamente FEIO. Sem cores do estágio, sem cronômetro, sem
- * cards bonitos. Só lista crua agrupada por estágio. A beleza vem na
- * Fase 3 (componentes CardPaciente, Cronometro, MetricasDoDia, etc.).
+ * Header com título + métricas do dia + seletor de médicos.
+ * Rodapé fixo com status da conexão e contagem regressiva.
+ *
+ * Cards reordenados em cada coluna por severidade (cards em alerta no topo)
+ * e, no caso de empate, por horário.
  */
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import SeletorMedicos from "@/components/SeletorMedicos";
+import CardPaciente, { severidadeCard } from "@/components/CardPaciente";
+import PainelLayout from "@/components/PainelLayout";
 import { useMedicosSelecionados } from "@/hooks/useMedicosSelecionados";
 import { usePainel } from "@/hooks/usePainel";
-import type { CardPaciente, EstagioPaciente } from "@/lib/tipos";
-
-// Ordem em que os grupos aparecem na tela. ATENDIDO e FALTOU somem da
-// Recepção (PLANEJAMENTO seção 2.3). Mantemos AGENDADO no fim como
-// "próximos a chegar".
-const ORDEM_ESTAGIOS: EstagioPaciente[] = [
-  "RECEPCAO",
-  "DILATACAO",
-  "SALA_EXAMES",
-  "PRONTO_MEDICO",
-  "AGENDADO",
-];
-
-const NOME_ESTAGIO: Record<EstagioPaciente, string> = {
-  RECEPCAO: "Em recepção",
-  DILATACAO: "Em dilatação",
-  SALA_EXAMES: "Em sala de exames",
-  PRONTO_MEDICO: "Pronto para o médico",
-  AGENDADO: "Próximos a chegar",
-  ATENDIDO: "Atendido",
-  FALTOU: "Faltou",
-};
+import { calcularMetricasDia } from "@/lib/calcularMetricas";
+import type { CardPaciente as CardData, EstagioPaciente } from "@/lib/tipos";
 
 export default function RecepcaoPage() {
   const { codigos, hidratado, alternar, noLimite } = useMedicosSelecionados();
   const { cards, atualizadoEm, fonteOnline, ultimoErro, carregandoInicial } =
     usePainel(codigos);
 
-  const grupos = useMemo(() => agruparPorEstagio(cards), [cards]);
+  // Re-render leve a cada 5s para que a ordenação por severidade reaja
+  // mesmo quando o painel não recebeu novo dado (cards podem migrar de
+  // amarelo para vermelho só pelo tempo passando).
+  const [tickOrdenacao, setTickOrdenacao] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTickOrdenacao((v) => v + 1), 5_000);
+    return () => clearInterval(t);
+  }, []);
+
+  const colunas = useMemo(() => {
+    const agora = new Date();
+    const recepcao = filtrarPorEstagio(cards, "RECEPCAO");
+    const dilatacao = filtrarPorEstagio(cards, "DILATACAO");
+    const proximos = filtrarPorEstagio(cards, "AGENDADO");
+    return {
+      recepcao: ordenarPorSeveridade(recepcao, agora),
+      dilatacao: ordenarPorSeveridade(dilatacao, agora),
+      proximos: ordenarPorHorario(proximos),
+    };
+    // tickOrdenacao força reavaliação periódica.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cards, tickOrdenacao]);
+
+  const metricas = useMemo(() => calcularMetricasDia(cards), [cards]);
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <header className="border-b border-slate-200 bg-white px-6 py-4">
-        <div className="mx-auto flex max-w-6xl flex-col gap-3">
-          <div className="flex items-baseline justify-between">
-            <h1 className="text-2xl font-semibold text-slate-900">
-              Recepção · Painel ao vivo
-            </h1>
-            <p className="text-xs text-slate-500">
-              Fase 2 (visual mínimo) · atualiza a cada 10 s
-            </p>
-          </div>
-          {hidratado && (
-            <SeletorMedicos
-              selecionados={codigos}
-              onAlternar={alternar}
-              noLimite={noLimite}
-            />
-          )}
+    <PainelLayout
+      titulo="Recepção"
+      subtitulo="Painel ao vivo · Oftalmocenter"
+      metricas={metricas}
+      rotuloMetricaCentral="Atendidos"
+      selecionados={codigos}
+      onAlternar={alternar}
+      noLimite={noLimite}
+      fonteOnline={fonteOnline}
+      ultimoErro={ultimoErro}
+      atualizadoEm={atualizadoEm}
+    >
+      {!hidratado ? (
+        <CarregandoInicial mensagem="Carregando preferências…" />
+      ) : codigos.length === 0 ? (
+        <EstadoVazio />
+      ) : carregandoInicial ? (
+        <CarregandoInicial mensagem="Buscando agendamentos do dia…" />
+      ) : (
+        <div className="grid gap-5 lg:grid-cols-3">
+          <Coluna titulo="Em recepção" cards={colunas.recepcao} mensagemVazio="Ninguém em recepção agora." />
+          <Coluna titulo="Em dilatação" cards={colunas.dilatacao} mensagemVazio="Ninguém dilatando agora." />
+          <Coluna
+            titulo="Próximos a chegar"
+            cards={colunas.proximos}
+            mensagemVazio="Nada agendado a partir deste momento."
+            destacarHorario
+          />
         </div>
+      )}
+    </PainelLayout>
+  );
+}
+
+function Coluna({
+  titulo,
+  cards,
+  mensagemVazio,
+  destacarHorario = false,
+}: {
+  titulo: string;
+  cards: CardData[];
+  mensagemVazio: string;
+  destacarHorario?: boolean;
+}) {
+  return (
+    <section className="flex flex-col gap-3">
+      <header className="flex items-baseline justify-between border-b border-slate-200 pb-1">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-700">
+          {titulo}
+        </h2>
+        <span className="text-xs text-slate-500">{cards.length}</span>
       </header>
 
-      <main className="mx-auto max-w-6xl px-6 py-8">
-        {!hidratado ? (
-          <p className="text-slate-500">Carregando preferências…</p>
-        ) : codigos.length === 0 ? (
-          <EstadoVazio />
-        ) : carregandoInicial ? (
-          <p className="text-slate-500">Buscando agendamentos…</p>
-        ) : cards.length === 0 ? (
-          <p className="text-slate-500">
-            Nenhum agendamento para os médicos selecionados hoje.
-          </p>
-        ) : (
-          <div className="space-y-8">
-            {ORDEM_ESTAGIOS.map((estagio) => {
-              const cardsDoGrupo = grupos[estagio] ?? [];
-              if (cardsDoGrupo.length === 0) return null;
-              return (
-                <section key={estagio}>
-                  <h2 className="mb-2 text-sm font-semibold uppercase tracking-wider text-slate-600">
-                    {NOME_ESTAGIO[estagio]} ({cardsDoGrupo.length})
-                  </h2>
-                  <ul className="divide-y divide-slate-200 rounded border border-slate-200 bg-white">
-                    {cardsDoGrupo.map((card) => (
-                      <li key={card.agendamentoId} className="px-3 py-2 text-sm">
-                        <LinhaCard card={card} />
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              );
-            })}
-          </div>
-        )}
-      </main>
-
-      <footer className="fixed inset-x-0 bottom-0 border-t border-slate-200 bg-white px-6 py-2 text-xs text-slate-600">
-        <div className="mx-auto flex max-w-6xl items-center justify-between">
-          <span>
-            <StatusFonte online={fonteOnline} />
-            {ultimoErro && (
-              <span className="ml-3 text-red-600">erro: {ultimoErro}</span>
-            )}
-          </span>
-          <span>
-            {atualizadoEm
-              ? `última atualização: ${formatarHora(atualizadoEm)}`
-              : "—"}
-          </span>
-        </div>
-      </footer>
-    </div>
-  );
-}
-
-function LinhaCard({ card }: { card: CardPaciente }) {
-  const partesCabecalho = [
-    card.horarioAgendamento,
-    card.paciente.idade !== null ? `${card.paciente.idade} anos` : null,
-    card.medico.nome,
-    card.convenio,
-  ].filter((p): p is string => Boolean(p));
-
-  return (
-    <div>
-      <p className="font-medium text-slate-900">{card.paciente.nome}</p>
-      <p className="text-xs text-slate-500">{partesCabecalho.join(" · ")}</p>
-      {card.complemento && (
-        <p className="mt-1 text-xs italic text-slate-700">
-          “{card.complemento.trim()}”
+      {cards.length === 0 ? (
+        <p className="rounded border border-dashed border-slate-300 px-3 py-6 text-center text-xs text-slate-500">
+          {mensagemVazio}
         </p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {cards.map((card) => (
+            <CardPaciente
+              key={card.agendamentoId}
+              card={card}
+              subestado={destacarHorario ? null : null}
+            />
+          ))}
+        </div>
       )}
-    </div>
-  );
-}
-
-function StatusFonte({ online }: { online: boolean }) {
-  return online ? (
-    <span className="text-emerald-700">● ProDoctor conectado</span>
-  ) : (
-    <span className="text-red-600">● ProDoctor desconectado</span>
+    </section>
   );
 }
 
 function EstadoVazio() {
   return (
-    <div className="rounded border border-dashed border-slate-300 bg-white p-8 text-center text-slate-600">
+    <div className="rounded-xl border border-dashed border-slate-300 bg-white p-12 text-center text-slate-600">
       <p className="text-base">Selecione até 2 médicos no topo para começar.</p>
-      <p className="mt-2 text-xs">
-        A escolha fica salva neste navegador (cada TV pode ter sua dupla
-        diferente).
+      <p className="mt-2 text-xs text-slate-500">
+        A escolha fica salva neste navegador. Cada TV pode ter uma dupla
+        diferente.
       </p>
     </div>
   );
 }
 
-function agruparPorEstagio(
-  cards: CardPaciente[],
-): Partial<Record<EstagioPaciente, CardPaciente[]>> {
-  const agrupado: Partial<Record<EstagioPaciente, CardPaciente[]>> = {};
-  for (const card of cards) {
-    const lista = agrupado[card.estagio] ?? [];
-    lista.push(card);
-    agrupado[card.estagio] = lista;
-  }
-  // Ordena cada grupo por horário do agendamento (estável o suficiente).
-  for (const estagio of Object.keys(agrupado) as EstagioPaciente[]) {
-    const lista = agrupado[estagio];
-    if (!lista) continue;
-    lista.sort((a, b) => {
-      const ha = a.horarioAgendamento ?? "";
-      const hb = b.horarioAgendamento ?? "";
-      return ha.localeCompare(hb);
-    });
-  }
-  return agrupado;
+function CarregandoInicial({ mensagem }: { mensagem: string }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-12 text-center text-slate-500">
+      <p>{mensagem}</p>
+    </div>
+  );
 }
 
-function formatarHora(iso: string): string {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleTimeString("pt-BR", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      timeZone: "America/Sao_Paulo",
-    });
-  } catch {
-    return iso;
-  }
+function filtrarPorEstagio(
+  cards: CardData[],
+  estagio: EstagioPaciente,
+): CardData[] {
+  return cards.filter((c) => c.estagio === estagio);
+}
+
+function ordenarPorSeveridade(cards: CardData[], agora: Date): CardData[] {
+  // Severidade DESC (alertas no topo); empate por horário ASC.
+  return [...cards].sort((a, b) => {
+    const sa = severidadeCard(a, agora);
+    const sb = severidadeCard(b, agora);
+    if (sa !== sb) return sb - sa;
+    return (a.horarioAgendamento ?? "").localeCompare(b.horarioAgendamento ?? "");
+  });
+}
+
+function ordenarPorHorario(cards: CardData[]): CardData[] {
+  return [...cards].sort((a, b) =>
+    (a.horarioAgendamento ?? "").localeCompare(b.horarioAgendamento ?? ""),
+  );
 }
