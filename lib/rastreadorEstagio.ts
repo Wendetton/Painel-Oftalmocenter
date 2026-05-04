@@ -4,23 +4,24 @@
  * Mantém um Map em memória <agendamentoId, {estagio, desdeEm}> e devolve
  * o instante em que o servidor primeiro viu cada card no estágio atual.
  *
- * Regras (simples e uniformes para todos os estágios):
+ * Hidratação: a memória pode ser pré-populada a partir do Firestore na
+ * primeira chamada após cold start, via hidratarEstados(). Assim o
+ * cronômetro do card mostra o tempo "real" desde a transição, mesmo que
+ * o servidor tenha acabado de subir e nunca tenha visto aquele paciente.
+ *
+ * Regras (uniformes para todos os estágios):
  * - Primeira aparição de um agendamentoId → desdeEm = agora.
+ *   (O caller pode aproveitar e persistir no Firestore.)
  * - Estágio mudou → desdeEm = agora (cronômetro zera).
  * - Estágio igual ao da chamada anterior → preserva desdeEm.
  *
- * Limitação aceita: serverless cold starts perdem o Map. Quando isso
- * acontece, todos os cronômetros voltam a 00:00 — comportamento idêntico
- * ao caso de "nova chegada". Como o Vercel mantém a instância quente
- * enquanto há tráfego (polling de 10s das TVs), na prática isso só
- * ocorre depois de horas sem uso (madrugada), quando o impacto é nulo.
- *
- * Decisão de design: NÃO tentamos restaurar tempos perdidos a partir dos
- * timestamps da API ProDoctor (horaCompareceu, horaAtendimento). Eles são
- * "primeira marcação" e não acompanham toggles — usá-los como fallback
- * causa erros sutis para pacientes que voltam de dilatação ao consultório.
+ * A persistência no Firestore vive em lib/estadoAtualPersistente.ts. O
+ * rastreador em si não conhece esse detalhe — é responsabilidade do
+ * caller (app/api/painel/route.ts) chamar hidratarEstados na primeira
+ * vez e salvarEstadoAtual em cada transição/primeira aparição.
  */
 
+import type { EstadoSalvo } from "./estadoAtualPersistente";
 import type { EstagioPaciente } from "./tipos";
 
 interface EntradaRastreador {
@@ -32,13 +33,16 @@ export interface ResultadoRastreador {
   /** Timestamp (ms epoch) de quando o servidor primeiro viu o card neste estágio. */
   desdeEm: number;
   /**
-   * `true` quando observamos uma TRANSIÇÃO real de estágio (o anterior era
-   * diferente). `false` na primeira aparição do agendamento (que pode ser
-   * apenas um cold start vendo um card que já estava lá há horas) e quando
-   * o estágio se manteve.
-   *
-   * O consumidor (event logger do Firestore) usa isso para evitar gravar
-   * eventos espúrios após cold starts.
+   * `true` quando vemos pela primeira vez este agendamentoId nesta
+   * instância (pode ter vindo do Firestore via hidratação, ou ser
+   * paciente novo do dia). O caller usa para gravar/atualizar o estado
+   * no Firestore.
+   */
+  primeiraAparicao: boolean;
+  /**
+   * `true` quando observamos uma TRANSIÇÃO real de estágio (o anterior
+   * era diferente). O caller usa para gravar evento na coleção
+   * `eventosEstagio` (analytics).
    */
   transicaoObservada: boolean;
   /** Estágio anterior, ou null se primeira aparição. */
@@ -46,11 +50,43 @@ export interface ResultadoRastreador {
 }
 
 const rastreador = new Map<string, EntradaRastreador>();
+let dataDaHidratacao: string | null = null;
+
+/**
+ * Pré-popula o rastreador com estados vindos do Firestore. Idempotente:
+ * se já está hidratado para a mesma data, ignora. Se chega data nova,
+ * limpa estados antigos antes (para não vazar dia anterior).
+ */
+export function hidratarEstados(
+  estados: Map<string, EstadoSalvo>,
+  paraData: string,
+): void {
+  if (dataDaHidratacao !== paraData) {
+    rastreador.clear();
+    dataDaHidratacao = paraData;
+  }
+  for (const [id, est] of estados) {
+    // Não sobrescreve entradas já em memória — a memória pode ter
+    // info mais nova que o Firestore (ex.: transição feita por esta
+    // instância nos últimos segundos).
+    if (!rastreador.has(id)) {
+      rastreador.set(id, { estagio: est.estagio, desdeEm: est.desdeEmMs });
+    }
+  }
+}
+
+/**
+ * Diz se o rastreador já foi hidratado para a data informada nesta
+ * instância. O /api/painel usa para decidir se precisa carregar do
+ * Firestore (lazy load por instância).
+ */
+export function jaHidratadoPara(data: string): boolean {
+  return dataDaHidratacao === data;
+}
 
 /**
  * Registra ou atualiza um agendamento. Devolve o instante em que o paciente
- * entrou no estágio atual + se isso foi uma transição real ou primeira
- * aparição.
+ * entrou no estágio atual + flags indicando primeira aparição/transição.
  */
 export function registrarEstagio(
   agendamentoId: string,
@@ -60,25 +96,29 @@ export function registrarEstagio(
   const entrada = rastreador.get(agendamentoId);
 
   let desdeEm: number;
+  let primeiraAparicao: boolean;
   let transicaoObservada: boolean;
   let estagioAnterior: EstagioPaciente | null;
 
   if (!entrada) {
     desdeEm = agora;
-    transicaoObservada = false; // primeira aparição: não temos certeza de que houve transição agora
+    primeiraAparicao = true;
+    transicaoObservada = false;
     estagioAnterior = null;
   } else if (entrada.estagio !== estagio) {
     desdeEm = agora;
+    primeiraAparicao = false;
     transicaoObservada = true;
     estagioAnterior = entrada.estagio;
   } else {
     desdeEm = entrada.desdeEm;
+    primeiraAparicao = false;
     transicaoObservada = false;
     estagioAnterior = entrada.estagio;
   }
 
   rastreador.set(agendamentoId, { estagio, desdeEm });
-  return { desdeEm, transicaoObservada, estagioAnterior };
+  return { desdeEm, primeiraAparicao, transicaoObservada, estagioAnterior };
 }
 
 /**
