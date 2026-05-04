@@ -1,26 +1,20 @@
 "use client";
 
 /**
- * Card de paciente conforme PLANEJAMENTO seção 4.2 (Anatomia do card),
- * com os ajustes feitos pós-validação:
+ * Card de paciente — refinamento visual "premium claro" com tipografia
+ * dimensionada para TV (visualizada de 2-4 m).
  *
- * 1. Barra colorida lateral esquerda (8 px) na cor do estágio.
- * 2. Cabeçalho com etiqueta do estágio à esquerda + ícones de tipo
- *    (consulta/retorno/exame) à direita, ao estilo ProDoctor.
- * 3. Nome do paciente em destaque + idade ao lado.
- * 4. Linha de contexto: horário · médico (apelido) · convênio.
- * 5. Faixa do complemento (quando existe).
- * 6. Linha inferior: subestado à esquerda + cronômetro tabular à direita.
+ * Hierarquia visual decidida em conversa com Fernando:
+ * 1. Cronômetro DOMINANTE (48 px peso 700, tabular). É o primeiro
+ *    elemento que o olho captura.
+ * 2. Nome do paciente em destaque (30 px peso 600).
+ * 3. Idade ao lado em peso normal (18 px).
+ * 4. Etiqueta do estágio + ícone de tipo de agendamento (32 px) no topo.
+ * 5. Linha de contexto (horário · médico · convênio) discreta.
+ * 6. Faixa do complemento (quando há) sólida na cor do estágio.
  *
- * O cronômetro reseta ao trocar de estágio porque usa `estagioDesdeEm`,
- * timestamp gerado pelo rastreador no servidor a cada transição.
- *
- * Modo edição (clicavel=true):
- * - Card vira <button>: cursor pointer, hover destacado, mini hint
- *   "mover" no canto. Ao clicar, dispara onClick (parent abre o action
- *   sheet de movimentação).
- * - Modo leitura (clicavel=false, default): card é <article> normal,
- *   sem mudança visual em relação ao comportamento anterior.
+ * Aura sutil ao redor do card na cor do estágio (box-shadow rgba) deixa
+ * o painel "respirando" sem virar ruído visual.
  */
 
 import Cronometro, { minutosDesdeIso, nivelDoCronometro } from "./Cronometro";
@@ -34,10 +28,7 @@ interface Props {
   card: CardPacienteData;
   /** Subtexto opcional (ex.: "veio dos exames"). */
   subestado?: string | null;
-  /**
-   * Quando true, o card vira clicável (cursor pointer + hover destacado)
-   * e dispara onClick. Usado pelo modo edição para abrir o action sheet.
-   */
+  /** Quando true, o card vira clicável (modo edição). */
   clicavel?: boolean;
   onClick?: () => void;
 }
@@ -50,19 +41,26 @@ export default function CardPaciente({
 }: Props) {
   const cores = CORES_POR_ESTAGIO[card.estagio];
 
+  // Sombra colorida do estágio (aura sutil) + sombra base para profundidade.
+  const sombra = `0 1px 3px rgba(0,0,0,0.05), 0 8px 24px ${cores.sombra}`;
+  const estiloBase = {
+    borderLeft: `10px solid ${cores.borda}`,
+    boxShadow: sombra,
+  } as const;
+
   if (clicavel) {
     return (
       <button
         type="button"
         onClick={onClick}
-        className="group relative flex w-full gap-3 overflow-hidden rounded-lg border border-slate-200 bg-white text-left shadow-sm ring-blue-300 transition hover:shadow-md hover:ring-2 focus:outline-none focus:ring-2"
-        style={{ borderLeft: `8px solid ${cores.borda}` }}
+        className="group relative flex w-full gap-3 overflow-hidden rounded-xl border border-slate-200 bg-white text-left ring-blue-300 transition hover:-translate-y-0.5 hover:ring-2 focus:outline-none focus:ring-2"
+        style={estiloBase}
         title="Clique para mover este paciente"
       >
         <ConteudoCard card={card} subestado={subestado} cores={cores} />
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute right-3 top-3 hidden text-[10px] font-semibold uppercase tracking-wider text-blue-600 group-hover:inline"
+          className="pointer-events-none absolute right-4 top-4 hidden text-xs font-bold uppercase tracking-widest text-blue-600 group-hover:inline"
         >
           mover →
         </span>
@@ -72,8 +70,8 @@ export default function CardPaciente({
 
   return (
     <article
-      className="relative flex gap-3 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm"
-      style={{ borderLeft: `8px solid ${cores.borda}` }}
+      className="relative flex gap-3 overflow-hidden rounded-xl border border-slate-200 bg-white"
+      style={estiloBase}
     >
       <ConteudoCard card={card} subestado={subestado} cores={cores} />
     </article>
@@ -90,27 +88,27 @@ function ConteudoCard({
   cores: CoresEstagio;
 }) {
   return (
-    <div className="flex flex-1 flex-col gap-1 px-4 py-3">
+    <div className="flex flex-1 flex-col gap-2 px-5 py-4">
       <div className="flex items-center justify-between gap-2">
         <p
-          className="text-[11px] font-semibold uppercase tracking-wider"
+          className="text-xs font-bold uppercase tracking-[0.18em]"
           style={{ color: cores.borda }}
         >
           {cores.rotulo}
         </p>
-        <IconeTipoAgendamento tipo={card.tipoAgendamento} size={22} />
+        <IconeTipoAgendamento tipo={card.tipoAgendamento} size={32} />
       </div>
 
-      <h3 className="text-xl font-medium leading-tight text-slate-900">
+      <h3 className="text-3xl font-semibold leading-tight tracking-tight text-slate-900">
         {card.paciente.nome}
         {card.paciente.idade !== null && (
-          <span className="ml-2 text-base font-normal text-slate-500">
+          <span className="ml-2 text-lg font-normal text-slate-500">
             · {card.paciente.idade}
           </span>
         )}
       </h3>
 
-      <p className="text-xs text-slate-500">
+      <p className="text-sm text-slate-500">
         {[
           card.horarioAgendamento,
           nomeMedicoCurto(card.medico.codigo, card.medico.nome),
@@ -122,28 +120,25 @@ function ConteudoCard({
 
       {card.complemento && card.complemento.trim() !== "" && (
         <div
-          className="mt-1 flex items-start gap-2 rounded px-2 py-1.5 text-sm"
-          style={{ backgroundColor: cores.bg, color: cores.texto }}
+          className="mt-1 flex items-start gap-2 rounded-lg px-3 py-2 text-base"
+          style={{ backgroundColor: cores.borda, color: "#FFFFFF" }}
         >
-          <span
-            className="mt-1.5 inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full"
-            style={{ backgroundColor: cores.borda }}
-            aria-hidden="true"
-          />
-          <span className="font-medium leading-snug line-clamp-2">
+          <span className="font-semibold leading-snug line-clamp-2">
             {card.complemento.trim()}
           </span>
         </div>
       )}
 
-      <div className="mt-1 flex items-end justify-between gap-2">
-        <span className="text-xs text-slate-500">{subestado ?? ""}</span>
+      <div className="mt-2 flex items-end justify-between gap-2">
+        <span className="text-xs uppercase tracking-widest text-slate-400">
+          {subestado ?? ""}
+        </span>
         {card.estagio === "AGENDADO" ? (
-          <span className="text-base font-semibold text-slate-700 tabular-nums">
+          <span className="text-2xl font-bold tabular-nums text-slate-700">
             {card.horarioAgendamento ?? "—"}
           </span>
         ) : (
-          <Cronometro desdeEm={card.estagioDesdeEm} className="text-2xl" />
+          <Cronometro desdeEm={card.estagioDesdeEm} className="text-5xl font-bold" />
         )}
       </div>
     </div>
@@ -152,8 +147,7 @@ function ConteudoCard({
 
 /**
  * Helper exportado para reordenar listas: cards em alerta no topo.
- * Usa o cronômetro do estágio atual (estagioDesdeEm) e o classifica em
- * 4 níveis. AGENDADO/FALTOU não têm cronômetro → severidade -1.
+ * AGENDADO/FALTOU não têm cronômetro → severidade -1.
  */
 export function severidadeCard(card: CardPacienteData, agora: Date): number {
   if (card.estagio === "AGENDADO" || card.estagio === "FALTOU") return -1;
