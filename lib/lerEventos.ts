@@ -47,12 +47,17 @@ export async function buscarEventosPeriodo(
     );
   }
 
+  // Query enxuta: filtramos por data (range) e ordenamos por data. Não
+  // adicionamos orderBy("momento") aqui de propósito — isso exigiria um
+  // índice composto manual no Firestore Console, que dá trabalho pra
+  // configurar. A ordenação fina por momento dentro de cada agendamento
+  // acontece no cliente em reconstruirTrajetorias() (já estava lá),
+  // então o resultado final dos agregadores fica idêntico.
   const snap = await fs
     .collection("eventosEstagio")
     .where("data", ">=", dataInicio)
     .where("data", "<=", dataFim)
     .orderBy("data", "asc")
-    .orderBy("momento", "asc")
     .limit(10_000)
     .get();
 
