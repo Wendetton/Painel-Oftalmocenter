@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 
 import { classificarEstagio } from "@/lib/classificador";
+import { dataYYYYMMDDBrasil } from "@/lib/configuracao";
+import { gravarEventoTransicao } from "@/lib/eventoEstagio";
 import {
   buscarAgendamentosDoDia,
   buscarIdadePaciente,
@@ -89,12 +91,34 @@ export async function GET(req: Request): Promise<NextResponse<RespostaPainel>> {
 
       // AGENDADO e FALTOU não têm cronômetro — não passam pelo rastreador.
       // Os demais estágios pedem ao rastreador o instante em que o servidor
-      // primeiro viu o card naquele estágio. Esse timestamp zera a cada
-      // transição e é uniforme para todos os 4 estágios com cronômetro.
+      // primeiro viu o card naquele estágio + se isso foi uma transição real.
+      // Quando é transição real (mudou de estágio), gravamos um evento no
+      // Firestore para análises futuras (Fase A do dashboard).
       let estagioDesdeEm: string | null = null;
       if (estagio !== "AGENDADO" && estagio !== "FALTOU") {
-        const ts = registrarEstagio(agendamentoId, estagio);
-        estagioDesdeEm = new Date(ts).toISOString();
+        const resultado = registrarEstagio(agendamentoId, estagio);
+        estagioDesdeEm = new Date(resultado.desdeEm).toISOString();
+
+        if (resultado.transicaoObservada) {
+          // Fire and forget — não bloqueia a resposta da API. Se o Firestore
+          // estiver fora ou as creds ausentes, gravarEventoTransicao
+          // silencia internamente e o painel segue normal.
+          void gravarEventoTransicao({
+            agendamentoId,
+            pacienteCodigo: codigoPaciente,
+            pacienteNome: ag.paciente?.nome ?? "(sem nome)",
+            medicoCodigo: ag.usuario?.codigo ?? null,
+            medicoNome: ag.usuario?.nome ?? "—",
+            convenio: ag.convenio?.nome ?? null,
+            estagioAnterior: resultado.estagioAnterior,
+            estagioNovo: estagio,
+            momento: new Date(resultado.desdeEm),
+            data: dataYYYYMMDDBrasil(),
+            tipoConsulta: ag.tipoAgendamento?.consulta ?? false,
+            tipoRetorno: ag.tipoAgendamento?.retorno ?? false,
+            tipoExame: ag.tipoAgendamento?.exame ?? false,
+          });
+        }
       }
 
       return {
