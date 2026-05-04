@@ -1,25 +1,22 @@
 "use client";
 
 /**
- * Painel da Sala de Exames — Fase 4 (PLANEJAMENTO seção 4.5).
+ * Painel da Sala de Exames (PLANEJAMENTO seção 4.5).
  *
- * Layout: 3 colunas verticais
+ * 3 colunas:
  *   1. Em exames (amarelo) — pacientes em SALA_EXAMES.
- *   2. Em dilatação (roxo, compartilhada com Recepção) — pacientes em
- *      DILATAÇÃO. A equipe de exames também precisa enxergar quem está
- *      dilatando para chamar de volta na hora certa.
- *   3. Aguardando vir (cinza) — pacientes em RECEPÇÃO. Estão na ficha mas
- *      em breve vão entrar na sala de exames; útil pra equipe se preparar.
+ *   2. Em dilatação (roxo) — compartilhada com Recepção.
+ *   3. Aguardando vir (cinza/recepção) — pacientes em RECEPÇÃO que em
+ *      breve serão liberados pra sala.
  *
- * Métrica central: "Examinados" (quem já passou pela sala hoje).
- *
- * Reusa os componentes da Fase 3: PainelLayout, CardPaciente, hooks.
+ * Métrica central: "Examinados" (passaram pela sala hoje).
  */
 
 import { useEffect, useMemo, useState } from "react";
 
 import AcaoMoverCard from "@/components/AcaoMoverCard";
-import CardPaciente, { severidadeCard } from "@/components/CardPaciente";
+import { severidadeCard } from "@/components/CardPaciente";
+import ColunaCards from "@/components/ColunaCards";
 import PainelLayout from "@/components/PainelLayout";
 import { useBeepEntradaEstagio } from "@/hooks/useBeepEntradaEstagio";
 import { useMedicosSelecionados } from "@/hooks/useMedicosSelecionados";
@@ -47,7 +44,6 @@ export default function ExamesPage() {
     habilitado: beepLigado,
   });
 
-  // Tick para reordenação periódica por severidade do cronômetro.
   const [tickOrdenacao, setTickOrdenacao] = useState(0);
   useEffect(() => {
     const t = setInterval(() => setTickOrdenacao((v) => v + 1), 5_000);
@@ -92,23 +88,26 @@ export default function ExamesPage() {
       ) : carregandoInicial ? (
         <Status mensagem="Buscando agendamentos do dia…" />
       ) : (
-        <div className="grid gap-5 lg:grid-cols-3">
-          <Coluna
+        <div className="grid gap-6 lg:grid-cols-3">
+          <ColunaCards
             titulo="Em exames"
+            estagioCor="SALA_EXAMES"
             cards={colunas.exames}
             mensagemVazio="Nenhum paciente na sala de exames."
             modoEdicao={edicao.ligado}
             onClickCard={setCardSelecionado}
           />
-          <Coluna
+          <ColunaCards
             titulo="Em dilatação"
+            estagioCor="DILATACAO"
             cards={colunas.dilatacao}
             mensagemVazio="Ninguém dilatando agora."
             modoEdicao={edicao.ligado}
             onClickCard={setCardSelecionado}
           />
-          <Coluna
+          <ColunaCards
             titulo="Aguardando vir"
+            estagioCor="RECEPCAO"
             cards={colunas.aguardando}
             mensagemVazio="Recepção está vazia."
             modoEdicao={edicao.ligado}
@@ -133,52 +132,10 @@ export default function ExamesPage() {
   );
 }
 
-function Coluna({
-  titulo,
-  cards,
-  mensagemVazio,
-  modoEdicao = false,
-  onClickCard,
-}: {
-  titulo: string;
-  cards: CardData[];
-  mensagemVazio: string;
-  modoEdicao?: boolean;
-  onClickCard?: (card: CardData) => void;
-}) {
-  return (
-    <section className="flex flex-col gap-3">
-      <header className="flex items-baseline justify-between border-b border-slate-200 pb-1">
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-700">
-          {titulo}
-        </h2>
-        <span className="text-xs text-slate-500">{cards.length}</span>
-      </header>
-
-      {cards.length === 0 ? (
-        <p className="rounded border border-dashed border-slate-300 px-3 py-6 text-center text-xs text-slate-500">
-          {mensagemVazio}
-        </p>
-      ) : (
-        <div className="flex flex-col gap-2">
-          {cards.map((card) => (
-            <CardPaciente
-              key={card.agendamentoId}
-              card={card}
-              clicavel={modoEdicao}
-              onClick={modoEdicao ? () => onClickCard?.(card) : undefined}
-            />
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
 function EstadoVazio() {
   return (
-    <div className="rounded-xl border border-dashed border-slate-300 bg-white p-12 text-center text-slate-600">
-      <p className="text-base">
+    <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-16 text-center text-slate-600 shadow-sm">
+      <p className="text-lg font-medium">
         Selecione até 2 médicos no botão do canto superior direito.
       </p>
       <p className="mt-2 text-xs text-slate-500">
@@ -191,7 +148,7 @@ function EstadoVazio() {
 
 function Status({ mensagem }: { mensagem: string }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-12 text-center text-slate-500">
+    <div className="rounded-2xl border border-slate-200 bg-white p-12 text-center text-slate-500 shadow-sm">
       <p>{mensagem}</p>
     </div>
   );

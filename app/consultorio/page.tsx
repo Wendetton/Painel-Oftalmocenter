@@ -29,6 +29,7 @@ import { usePainel } from "@/hooks/usePainel";
 import { usePreferenciaBeep } from "@/hooks/usePreferenciaBeep";
 import { calcularMetricasDia } from "@/lib/calcularMetricas";
 import { nomeMedicoCurto } from "@/lib/configuracao";
+import { CORES_POR_ESTAGIO } from "@/lib/cores";
 import type { CardPaciente as CardData, EstagioPaciente } from "@/lib/tipos";
 
 const ESTAGIOS_BEEP_CONSULTORIO: EstagioPaciente[] = ["PRONTO_MEDICO"];
@@ -95,19 +96,36 @@ export default function ConsultorioPage() {
       ) : carregandoInicial ? (
         <Status mensagem="Buscando agendamentos do dia…" />
       ) : (
-        <div className="grid gap-5 lg:grid-cols-3">
+        <div className="grid gap-6 lg:grid-cols-3">
           {/* Coluna principal — 2/3 — Pronto para chamar */}
           <section className="flex flex-col gap-3 lg:col-span-2">
-            <header className="flex items-baseline justify-between border-b border-slate-200 pb-1">
-              <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-700">
+            <header
+              className="flex items-center justify-between rounded-t-xl border-t-4 px-4 py-3"
+              style={{
+                borderTopColor: CORES_POR_ESTAGIO.PRONTO_MEDICO.borda,
+                backgroundColor: CORES_POR_ESTAGIO.PRONTO_MEDICO.bg,
+              }}
+            >
+              <h2
+                className="flex items-center gap-2 text-sm font-bold uppercase tracking-[0.18em]"
+                style={{ color: CORES_POR_ESTAGIO.PRONTO_MEDICO.texto }}
+              >
+                <span
+                  aria-hidden="true"
+                  className="inline-block h-2 w-2 rounded-full"
+                  style={{ backgroundColor: CORES_POR_ESTAGIO.PRONTO_MEDICO.borda }}
+                />
                 Pronto para chamar
               </h2>
-              <span className="text-xs text-slate-500">
+              <span
+                className="text-base font-bold tabular-nums"
+                style={{ color: CORES_POR_ESTAGIO.PRONTO_MEDICO.texto }}
+              >
                 {grupos.prontos.length}
               </span>
             </header>
             {grupos.prontos.length === 0 ? (
-              <p className="rounded border border-dashed border-slate-300 px-3 py-12 text-center text-sm text-slate-500">
+              <p className="rounded-xl border border-dashed border-slate-300 px-3 py-16 text-center text-sm text-slate-500">
                 Nenhum paciente pronto para chamar agora.
               </p>
             ) : (
@@ -127,53 +145,53 @@ export default function ConsultorioPage() {
           </section>
 
           {/* Coluna lateral — 1/3 — Em outras etapas */}
-          <aside className="flex flex-col gap-4">
+          <aside className="flex flex-col gap-5">
             <section>
-              <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-slate-700">
+              <h3 className="mb-3 text-xs font-bold uppercase tracking-[0.18em] text-slate-500">
                 Em outras etapas
               </h3>
-              <ul className="rounded-lg border border-slate-200 bg-white">
+              <ul className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                 <ItemContagem
                   rotulo="Em recepção"
                   contagem={grupos.contagemRecepcao}
-                  cor="#A32D2D"
+                  cor={CORES_POR_ESTAGIO.RECEPCAO.borda}
                 />
                 <ItemContagem
                   rotulo="Em sala de exames"
                   contagem={grupos.contagemExames}
-                  cor="#854F0B"
+                  cor={CORES_POR_ESTAGIO.SALA_EXAMES.borda}
                 />
                 <ItemContagem
                   rotulo="Em dilatação"
                   contagem={grupos.contagemDilatacao}
-                  cor="#534AB7"
+                  cor={CORES_POR_ESTAGIO.DILATACAO.borda}
                   ultimo
                 />
               </ul>
             </section>
 
             <section>
-              <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider text-slate-700">
+              <h3 className="mb-3 text-xs font-bold uppercase tracking-[0.18em] text-slate-500">
                 Próximos a chegar
               </h3>
               {grupos.proximos.length === 0 ? (
-                <p className="rounded border border-dashed border-slate-300 px-3 py-4 text-center text-xs text-slate-500">
+                <p className="rounded-xl border border-dashed border-slate-300 px-3 py-6 text-center text-xs text-slate-500">
                   Nada agendado a partir deste momento.
                 </p>
               ) : (
-                <ul className="flex flex-col divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
+                <ul className="flex flex-col divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                   {grupos.proximos.map((card) => (
                     <li
                       key={card.agendamentoId}
-                      className="flex items-baseline justify-between px-3 py-2 text-sm"
+                      className="flex items-baseline justify-between px-3 py-2.5 text-sm"
                     >
                       <span className="truncate text-slate-800">
-                        <span className="font-mono text-xs tabular-nums text-slate-500">
+                        <span className="mr-1 font-mono text-xs tabular-nums font-semibold text-slate-500">
                           {card.horarioAgendamento ?? "—"}
-                        </span>{" "}
+                        </span>
                         {card.paciente.nome}
                       </span>
-                      <span className="ml-2 shrink-0 text-[11px] uppercase tracking-wider text-slate-500">
+                      <span className="ml-2 shrink-0 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
                         {nomeMedicoCurto(card.medico.codigo, card.medico.nome)}
                       </span>
                     </li>
@@ -214,19 +232,19 @@ function ItemContagem({
 }) {
   return (
     <li
-      className={`flex items-center justify-between px-3 py-2 ${
+      className={`flex items-center justify-between px-4 py-3 ${
         !ultimo ? "border-b border-slate-200" : ""
       }`}
     >
-      <span className="flex items-center gap-2 text-sm text-slate-800">
+      <span className="flex items-center gap-3 text-sm text-slate-800">
         <span
           aria-hidden="true"
-          className="inline-block h-2.5 w-2.5 rounded-full"
+          className="inline-block h-3 w-3 rounded-full"
           style={{ backgroundColor: cor }}
         />
         {rotulo}
       </span>
-      <span className="text-base font-semibold tabular-nums text-slate-900">
+      <span className="text-xl font-bold tabular-nums text-slate-900">
         {contagem}
       </span>
     </li>
@@ -235,8 +253,8 @@ function ItemContagem({
 
 function EstadoVazio() {
   return (
-    <div className="rounded-xl border border-dashed border-slate-300 bg-white p-12 text-center text-slate-600">
-      <p className="text-base">
+    <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-16 text-center text-slate-600 shadow-sm">
+      <p className="text-lg font-medium">
         Selecione até 2 médicos no botão do canto superior direito.
       </p>
       <p className="mt-2 text-xs text-slate-500">
@@ -249,7 +267,7 @@ function EstadoVazio() {
 
 function Status({ mensagem }: { mensagem: string }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-12 text-center text-slate-500">
+    <div className="rounded-2xl border border-slate-200 bg-white p-12 text-center text-slate-500 shadow-sm">
       <p>{mensagem}</p>
     </div>
   );
