@@ -2,12 +2,21 @@ import { NextResponse } from "next/server";
 
 import { classificarEstagio } from "@/lib/classificador";
 import { dataYYYYMMDDBrasil } from "@/lib/configuracao";
+import {
+  carregarEstadosDoDia,
+  salvarEstadoAtual,
+} from "@/lib/estadoAtualPersistente";
 import { gravarEventoTransicao } from "@/lib/eventoEstagio";
 import {
   buscarAgendamentosDoDia,
   buscarIdadePaciente,
 } from "@/lib/prodoctor-client";
-import { limparAusentes, registrarEstagio } from "@/lib/rastreadorEstagio";
+import {
+  hidratarEstados,
+  jaHidratadoPara,
+  limparAusentes,
+  registrarEstagio,
+} from "@/lib/rastreadorEstagio";
 import type { CardPaciente, RespostaPainel, TipoAgendamento } from "@/lib/tipos";
 
 export const dynamic = "force-dynamic";
@@ -78,6 +87,18 @@ export async function GET(req: Request): Promise<NextResponse<RespostaPainel>> {
       }),
     );
 
+    // Hidrata o rastreador com o estado salvo no Firestore na PRIMEIRA
+    // chamada após cold start. Isso garante que o cronômetro de cada
+    // card mostre o tempo real desde a transição, mesmo quando o
+    // servidor acabou de subir e nunca tinha visto o paciente.
+    // Chamadas subsequentes na mesma instância pulam direto (já
+    // hidratado).
+    const dataHoje = dataYYYYMMDDBrasil();
+    if (!jaHidratadoPara(dataHoje)) {
+      const estadosSalvos = await carregarEstadosDoDia(dataHoje);
+      hidratarEstados(estadosSalvos, dataHoje);
+    }
+
     const idsAtivos = new Set<string>();
 
     const cards: CardPaciente[] = agendamentos.map((ag) => {
@@ -90,19 +111,33 @@ export async function GET(req: Request): Promise<NextResponse<RespostaPainel>> {
       idsAtivos.add(agendamentoId);
 
       // AGENDADO e FALTOU não têm cronômetro — não passam pelo rastreador.
-      // Os demais estágios pedem ao rastreador o instante em que o servidor
-      // primeiro viu o card naquele estágio + se isso foi uma transição real.
-      // Quando é transição real (mudou de estágio), gravamos um evento no
-      // Firestore para análises futuras (Fase A do dashboard).
+      // Para os demais estágios:
+      // - Pedimos ao rastreador o instante em que o servidor primeiro viu
+      //   o card naquele estágio (ou hidratado do Firestore na primeira
+      //   chamada após cold start).
+      // - Em primeira aparição OU transição: persistimos o estado no
+      //   Firestore (lib/estadoAtualPersistente) → próxima instância /
+      //   próxima TV consegue ler o mesmo cronômetro.
+      // - Em transição real (mudou de estágio): além de persistir,
+      //   gravamos um evento na coleção `eventosEstagio` (Fase A do
+      //   dashboard de análise).
       let estagioDesdeEm: string | null = null;
       if (estagio !== "AGENDADO" && estagio !== "FALTOU") {
         const resultado = registrarEstagio(agendamentoId, estagio);
         estagioDesdeEm = new Date(resultado.desdeEm).toISOString();
 
+        if (resultado.primeiraAparicao || resultado.transicaoObservada) {
+          // Persiste o instante de entrada no estágio. Fire-and-forget.
+          void salvarEstadoAtual(
+            agendamentoId,
+            estagio,
+            new Date(resultado.desdeEm),
+            dataHoje,
+          );
+        }
+
         if (resultado.transicaoObservada) {
-          // Fire and forget — não bloqueia a resposta da API. Se o Firestore
-          // estiver fora ou as creds ausentes, gravarEventoTransicao
-          // silencia internamente e o painel segue normal.
+          // Evento de analytics. Fire-and-forget.
           void gravarEventoTransicao({
             agendamentoId,
             pacienteCodigo: codigoPaciente,
@@ -113,7 +148,7 @@ export async function GET(req: Request): Promise<NextResponse<RespostaPainel>> {
             estagioAnterior: resultado.estagioAnterior,
             estagioNovo: estagio,
             momento: new Date(resultado.desdeEm),
-            data: dataYYYYMMDDBrasil(),
+            data: dataHoje,
             tipoConsulta: ag.tipoAgendamento?.consulta ?? false,
             tipoRetorno: ag.tipoAgendamento?.retorno ?? false,
             tipoExame: ag.tipoAgendamento?.exame ?? false,
