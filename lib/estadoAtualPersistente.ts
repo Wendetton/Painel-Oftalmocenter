@@ -2,24 +2,27 @@
  * Persistência do estado atual de cada agendamento no Firestore.
  *
  * Antes desta camada, o "instante em que o paciente entrou no estágio"
- * vivia só em memória do servidor Vercel — ou seja, quando o serverless
- * reiniciava (cold start) ou escalava, todo cronômetro voltava ao zero.
- * Pior: TVs diferentes podiam acabar conversando com instâncias
- * diferentes e ver cronômetros divergentes.
+ * vivia só em memória do servidor Vercel — quando o serverless reiniciava
+ * (cold start) ou escalava, todo cronômetro voltava ao zero. Pior: TVs
+ * diferentes podiam acabar conversando com instâncias diferentes e ver
+ * cronômetros divergentes.
  *
- * Estratégia desta camada:
+ * Estratégia:
  * - Coleção `estadoAtual` no Firestore. Chave do doc = agendamentoId.
- * - Cada doc guarda { estagio, desdeEm, data, atualizadoEm }.
- * - Na primeira chamada de /api/painel após cold start, lemos todos os
- *   docs do dia (≤ ~50) e hidratamos o rastreador em memória.
- * - Toda primeira aparição ou transição é gravada no Firestore.
- * - Chamadas seguintes na mesma instância usam memória (já hidratada),
- *   sem ler do Firestore de novo.
+ *   Conteúdo: { estagio, desdeEm, data, atualizadoEm }.
+ * - Na primeira chamada de /api/painel após cold start, lemos os docs
+ *   do dia (≤ ~50) e hidratamos o rastreador em memória.
+ * - Toda primeira aparição/transição é gravada no Firestore.
  *
- * Custo (free tier do Firestore: 50k reads e 20k writes por dia):
- * - Reads: ~50 docs por cold start. Vercel cold start é raro durante
- *   uso ativo; ~10-20 cold starts/dia = ~1k reads/dia.
- * - Writes: ~5 transições por paciente × 50 pacientes = ~250 writes/dia.
+ * Idempotência: a gravação usa transação. Se já existe doc com o MESMO
+ * estagio, mantém o desdeEm antigo. Se não existe ou estagio mudou,
+ * grava o novo. Isso evita race conditions entre múltiplas instâncias
+ * serverless competindo para "primeiro" gravar — quem chegar primeiro
+ * vira a fonte de verdade.
+ *
+ * Custo (free tier do Firestore: 50k reads e 20k writes/dia):
+ * - Reads: ~50 por cold start + ~1 por write idempotente.
+ * - Writes: ~5 transições por paciente × ~50 pacientes = ~250/dia.
  * Cobertura confortável.
  */
 
@@ -33,16 +36,28 @@ export interface EstadoSalvo {
   desdeEmMs: number;
 }
 
+export type ResultadoCarga =
+  | { ok: true; estados: Map<string, EstadoSalvo> }
+  | { ok: false; erro: string };
+
 /**
  * Carrega todos os estados atuais para uma data específica
- * (YYYY-MM-DD em SP). Devolve Map vazio em caso de erro — o painel
- * continua funcionando, só sem hidratação inicial.
+ * (YYYY-MM-DD em SP).
+ *
+ * Importante: distinguimos "Firestore desabilitado/falhou" de "Firestore
+ * disse que não há docs hoje". O caller usa essa distinção para decidir
+ * se marca o rastreador como hidratado (só marca se ok=true).
  */
 export async function carregarEstadosDoDia(
   data: string,
-): Promise<Map<string, EstadoSalvo>> {
+): Promise<ResultadoCarga> {
   const fs = obterFirestore();
-  if (!fs) return new Map();
+  if (!fs) {
+    return {
+      ok: false,
+      erro: "Firestore não disponível (FIREBASE_SERVICE_ACCOUNT ausente?)",
+    };
+  }
 
   try {
     const snap = await fs
@@ -51,7 +66,7 @@ export async function carregarEstadosDoDia(
       .limit(5_000)
       .get();
 
-    const map = new Map<string, EstadoSalvo>();
+    const estados = new Map<string, EstadoSalvo>();
     for (const doc of snap.docs) {
       const d = doc.data();
       const desdeEm = d.desdeEm;
@@ -67,23 +82,31 @@ export async function carregarEstadosDoDia(
       if (typeof d.estagio !== "string") continue;
       if (!Number.isFinite(ms)) continue;
 
-      map.set(doc.id, {
+      estados.set(doc.id, {
         estagio: d.estagio as EstagioPaciente,
         desdeEmMs: ms,
       });
     }
-    return map;
+    return { ok: true, estados };
   } catch (err) {
+    const erro = err instanceof Error ? err.message : "Erro desconhecido";
     // eslint-disable-next-line no-console
-    console.error("[firebase] erro ao carregar estadoAtual:", err);
-    return new Map();
+    console.error("[firebase] erro ao carregar estadoAtual:", erro);
+    return { ok: false, erro };
   }
 }
 
 /**
- * Persiste o estado atual de um agendamento. Fire-and-forget — se falhar,
- * só logamos e o painel continua funcionando (próxima transição vai
- * tentar de novo).
+ * Persiste o estado atual de um agendamento de forma IDEMPOTENTE:
+ * - Se já existe doc com o MESMO estagio para este agendamentoId:
+ *   NÃO sobrescreve. Mantém o desdeEm antigo (= primeira gravação ganha).
+ * - Se não existe ou tem outro estagio: grava o novo.
+ *
+ * Isso resolve a race condition entre múltiplas instâncias serverless
+ * tentando gravar "primeira aparição" do mesmo paciente — só uma vence,
+ * as outras leem o que ela gravou.
+ *
+ * Fire-and-forget: falhas são logadas, não jogadas pra cima.
  */
 export async function salvarEstadoAtual(
   agendamentoId: string,
@@ -94,19 +117,25 @@ export async function salvarEstadoAtual(
   const fs = obterFirestore();
   if (!fs) return;
 
+  const ref = fs.collection("estadoAtual").doc(agendamentoId);
+
   try {
-    await fs
-      .collection("estadoAtual")
-      .doc(agendamentoId)
-      .set(
-        {
-          estagio,
-          desdeEm,
-          data,
-          atualizadoEm: new Date(),
-        },
-        { merge: false },
-      );
+    await fs.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (snap.exists) {
+        const d = snap.data();
+        if (d?.estagio === estagio) {
+          // Já existe doc para este estágio — mantém o desdeEm antigo.
+          // Atualiza só `atualizadoEm` para auditoria (last seen).
+          tx.update(ref, { atualizadoEm: new Date() });
+          return;
+        }
+        // Estágio diferente: o paciente fez transição entre o último save
+        // e agora. Sobrescreve com o novo estagio + desdeEm.
+      }
+      // Novo doc OU transição real: grava normalmente.
+      tx.set(ref, { estagio, desdeEm, data, atualizadoEm: new Date() });
+    });
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error("[firebase] erro ao salvar estadoAtual:", err);

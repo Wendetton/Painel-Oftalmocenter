@@ -91,12 +91,20 @@ export async function GET(req: Request): Promise<NextResponse<RespostaPainel>> {
     // chamada após cold start. Isso garante que o cronômetro de cada
     // card mostre o tempo real desde a transição, mesmo quando o
     // servidor acabou de subir e nunca tinha visto o paciente.
-    // Chamadas subsequentes na mesma instância pulam direto (já
-    // hidratado).
+    //
+    // Importante: só marcamos como hidratado se a leitura do Firestore
+    // foi bem-sucedida. Se falhar (timeout, quota, etc.), tentamos de
+    // novo na próxima chamada — não queremos um Map vazio sendo tratado
+    // como "estado válido" (faria todo cronômetro zerar).
     const dataHoje = dataYYYYMMDDBrasil();
     if (!jaHidratadoPara(dataHoje)) {
-      const estadosSalvos = await carregarEstadosDoDia(dataHoje);
-      hidratarEstados(estadosSalvos, dataHoje);
+      const r = await carregarEstadosDoDia(dataHoje);
+      if (r.ok) {
+        hidratarEstados(r.estados, dataHoje);
+      }
+      // Se r.ok=false, NÃO marca como hidratado. Próxima chamada de
+      // /api/painel vai tentar carregar de novo. Enquanto isso o
+      // rastreador funciona em memória pura — comportamento antigo.
     }
 
     const idsAtivos = new Set<string>();
