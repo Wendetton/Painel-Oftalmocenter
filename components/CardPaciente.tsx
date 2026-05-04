@@ -19,8 +19,8 @@
 
 import Cronometro, { minutosDesdeIso, nivelDoCronometro } from "./Cronometro";
 import IconeTipoAgendamento from "./IconeTipoAgendamento";
+import TagMedico from "./TagMedico";
 
-import { nomeMedicoCurto } from "@/lib/configuracao";
 import { CORES_POR_ESTAGIO, type CoresEstagio } from "@/lib/cores";
 import type { CardPaciente as CardPacienteData, EstagioPaciente } from "@/lib/tipos";
 
@@ -90,12 +90,18 @@ function ConteudoCard({
   return (
     <div className="flex flex-1 flex-col gap-2 px-5 py-4">
       <div className="flex items-center justify-between gap-2">
-        <p
-          className="text-xs font-bold uppercase tracking-[0.18em]"
-          style={{ color: cores.borda }}
-        >
-          {cores.rotulo}
-        </p>
+        <div className="flex items-center gap-2.5">
+          <p
+            className="text-xs font-bold uppercase tracking-[0.18em]"
+            style={{ color: cores.borda }}
+          >
+            {cores.rotulo}
+          </p>
+          <TagMedico
+            codigo={card.medico.codigo}
+            nomeCompleto={card.medico.nome}
+          />
+        </div>
         <IconeTipoAgendamento tipo={card.tipoAgendamento} size={32} />
       </div>
 
@@ -109,11 +115,7 @@ function ConteudoCard({
       </h3>
 
       <p className="text-sm text-slate-500">
-        {[
-          card.horarioAgendamento,
-          nomeMedicoCurto(card.medico.codigo, card.medico.nome),
-          card.convenio,
-        ]
+        {[card.horarioAgendamento, card.convenio]
           .filter((p): p is string => Boolean(p))
           .join(" · ")}
       </p>
@@ -138,7 +140,7 @@ function ConteudoCard({
             {card.horarioAgendamento ?? "—"}
           </span>
         ) : (
-          <Cronometro desdeEm={card.estagioDesdeEm} className="text-5xl font-bold" />
+          <Cronometro desdeEm={card.estagioDesdeEm} className="text-[40px] font-bold leading-none" />
         )}
       </div>
     </div>

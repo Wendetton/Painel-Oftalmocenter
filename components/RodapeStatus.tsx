@@ -35,7 +35,7 @@ export default function RodapeStatus({
 
   return (
     <div className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 px-6 py-2 text-xs text-slate-600 backdrop-blur">
-      <div className="mx-auto flex max-w-7xl items-center justify-between">
+      <div className="mx-auto flex max-w-[1800px] items-center justify-between">
         <span className="flex items-center gap-3">
           {fonteOnline ? (
             <span className="flex items-center gap-1.5 text-emerald-700">
