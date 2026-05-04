@@ -41,6 +41,60 @@ export type ResultadoCarga =
   | { ok: false; erro: string };
 
 /**
+ * Consulta o estado atual de UM agendamento específico no Firestore.
+ *
+ * Usado como camada de defesa quando o rastreador em memória detecta
+ * "primeira aparição" — antes de assumir que é mesmo novo, perguntamos
+ * ao Firestore se já existe doc para este agendamentoId. Se existir,
+ * usamos o timestamp salvo (= cronômetro consistente entre instâncias).
+ *
+ * Falhas devolvem null silenciosamente — caller assume primeira aparição
+ * de verdade e segue o fluxo normal.
+ */
+export async function consultarEstadoAtual(
+  agendamentoId: string,
+): Promise<EstadoSalvo | null> {
+  const fs = obterFirestore();
+  if (!fs) return null;
+
+  try {
+    const snap = await fs
+      .collection("estadoAtual")
+      .doc(agendamentoId)
+      .get();
+
+    if (!snap.exists) return null;
+    const d = snap.data();
+    if (!d) return null;
+
+    const desdeEm = d.desdeEm;
+    const ms =
+      desdeEm instanceof Timestamp
+        ? desdeEm.toMillis()
+        : typeof desdeEm === "object" &&
+            desdeEm !== null &&
+            "seconds" in desdeEm
+          ? (desdeEm as { seconds: number }).seconds * 1000
+          : Number.NaN;
+
+    if (typeof d.estagio !== "string") return null;
+    if (!Number.isFinite(ms)) return null;
+
+    return {
+      estagio: d.estagio as EstagioPaciente,
+      desdeEmMs: ms,
+    };
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[firebase] erro ao consultar estadoAtual de ${agendamentoId}:`,
+      err,
+    );
+    return null;
+  }
+}
+
+/**
  * Carrega todos os estados atuais para uma data específica
  * (YYYY-MM-DD em SP).
  *
