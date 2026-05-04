@@ -18,10 +18,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import AcaoMoverCard from "@/components/AcaoMoverCard";
 import CardPaciente, { severidadeCard } from "@/components/CardPaciente";
 import PainelLayout from "@/components/PainelLayout";
 import { useBeepEntradaEstagio } from "@/hooks/useBeepEntradaEstagio";
 import { useMedicosSelecionados } from "@/hooks/useMedicosSelecionados";
+import { useModoEdicao } from "@/hooks/useModoEdicao";
+import { useMoverPaciente } from "@/hooks/useMoverPaciente";
 import { usePainel } from "@/hooks/usePainel";
 import { usePreferenciaBeep } from "@/hooks/usePreferenciaBeep";
 import { calcularMetricasDia } from "@/lib/calcularMetricas";
@@ -34,6 +37,9 @@ export default function RecepcaoPage() {
   const { cards, atualizadoEm, fonteOnline, ultimoErro, carregandoInicial } =
     usePainel(codigos);
   const { ligado: beepLigado, alternar: alternarBeep } = usePreferenciaBeep();
+  const edicao = useModoEdicao();
+  const { mover } = useMoverPaciente(edicao.pin);
+  const [cardSelecionado, setCardSelecionado] = useState<CardData | null>(null);
 
   useBeepEntradaEstagio({
     cards,
@@ -79,6 +85,10 @@ export default function RecepcaoPage() {
       atualizadoEm={atualizadoEm}
       beepLigado={beepLigado}
       onAlternarBeep={alternarBeep}
+      edicaoLigada={edicao.ligado}
+      edicaoConfiguradaNoServidor={edicao.configuradoNoServidor}
+      onDestravarEdicao={edicao.destravar}
+      onTravarEdicao={edicao.travar}
     >
       {!hidratado ? (
         <CarregandoInicial mensagem="Carregando preferências…" />
@@ -88,15 +98,42 @@ export default function RecepcaoPage() {
         <CarregandoInicial mensagem="Buscando agendamentos do dia…" />
       ) : (
         <div className="grid gap-5 lg:grid-cols-3">
-          <Coluna titulo="Em recepção" cards={colunas.recepcao} mensagemVazio="Ninguém em recepção agora." />
-          <Coluna titulo="Em dilatação" cards={colunas.dilatacao} mensagemVazio="Ninguém dilatando agora." />
+          <Coluna
+            titulo="Em recepção"
+            cards={colunas.recepcao}
+            mensagemVazio="Ninguém em recepção agora."
+            modoEdicao={edicao.ligado}
+            onClickCard={setCardSelecionado}
+          />
+          <Coluna
+            titulo="Em dilatação"
+            cards={colunas.dilatacao}
+            mensagemVazio="Ninguém dilatando agora."
+            modoEdicao={edicao.ligado}
+            onClickCard={setCardSelecionado}
+          />
           <Coluna
             titulo="Próximos a chegar"
             cards={colunas.proximos}
             mensagemVazio="Nada agendado a partir deste momento."
             destacarHorario
+            modoEdicao={edicao.ligado}
+            onClickCard={setCardSelecionado}
           />
         </div>
+      )}
+
+      {cardSelecionado && (
+        <AcaoMoverCard
+          card={cardSelecionado}
+          onFechar={() => setCardSelecionado(null)}
+          onMover={async (destino) => {
+            if (!cardSelecionado.chaveAgendamento) {
+              return { ok: false, mensagem: "Sem dados do agendamento." };
+            }
+            return mover(cardSelecionado.chaveAgendamento, destino);
+          }}
+        />
       )}
     </PainelLayout>
   );
@@ -107,11 +144,15 @@ function Coluna({
   cards,
   mensagemVazio,
   destacarHorario = false,
+  modoEdicao = false,
+  onClickCard,
 }: {
   titulo: string;
   cards: CardData[];
   mensagemVazio: string;
   destacarHorario?: boolean;
+  modoEdicao?: boolean;
+  onClickCard?: (card: CardData) => void;
 }) {
   return (
     <section className="flex flex-col gap-3">
@@ -133,6 +174,8 @@ function Coluna({
               key={card.agendamentoId}
               card={card}
               subestado={destacarHorario ? null : null}
+              clicavel={modoEdicao}
+              onClick={modoEdicao ? () => onClickCard?.(card) : undefined}
             />
           ))}
         </div>

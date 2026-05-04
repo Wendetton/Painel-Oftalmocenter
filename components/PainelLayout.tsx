@@ -15,6 +15,7 @@
 import type { ReactNode } from "react";
 
 import BotaoBeep from "./BotaoBeep";
+import BotaoModoEdicao from "./BotaoModoEdicao";
 import MetricasDoDia, { type MetricaCentral } from "./MetricasDoDia";
 import RodapeStatus from "./RodapeStatus";
 import SeletorMedicos from "./SeletorMedicos";
@@ -36,6 +37,13 @@ interface Props {
   /** Estado e toggle do beep — vem do hook usePreferenciaBeep no nivel da pagina. */
   beepLigado: boolean;
   onAlternarBeep: () => void;
+  /** Estado e controles do modo edição — vêm de useModoEdicao no nivel da pagina. */
+  edicaoLigada: boolean;
+  edicaoConfiguradaNoServidor: boolean;
+  onDestravarEdicao: (
+    pin: string,
+  ) => Promise<{ ok: true } | { ok: false; mensagem: string }>;
+  onTravarEdicao: () => void;
   children: ReactNode;
 }
 
@@ -52,6 +60,10 @@ export default function PainelLayout({
   atualizadoEm,
   beepLigado,
   onAlternarBeep,
+  edicaoLigada,
+  edicaoConfiguradaNoServidor,
+  onDestravarEdicao,
+  onTravarEdicao,
   children,
 }: Props) {
   return (
@@ -69,6 +81,12 @@ export default function PainelLayout({
           <div className="flex flex-wrap items-center gap-3">
             <MetricasDoDia metricas={metricas} metricaCentral={metricaCentral} />
             <BotaoBeep ligado={beepLigado} onAlternar={onAlternarBeep} />
+            <BotaoModoEdicao
+              ligado={edicaoLigada}
+              configuradoNoServidor={edicaoConfiguradaNoServidor}
+              onDestravar={onDestravarEdicao}
+              onTravar={onTravarEdicao}
+            />
             <SeletorMedicos
               selecionados={selecionados}
               onAlternar={onAlternar}

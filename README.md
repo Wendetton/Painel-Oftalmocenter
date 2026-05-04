@@ -109,6 +109,51 @@ o **Firebase Console → Firestore Database** e olhe a coleção — depois
 de alguns pacientes passarem pelo painel, você verá os documentos
 aparecendo lá.
 
+### 3.2 (Opcional) Habilitar o modo edição (mover paciente pelo painel)
+
+Por padrão os painéis são **somente leitura** — espelham o ProDoctor mas
+não alteram nada. Quando você ligar o modo edição, cada card vira
+clicável e abre um menu de "para onde mover este paciente" com todas
+as opções (Recepção / Sala de exames / Pronto p/ médico / Em dilatação /
+Atendido / Faltou). A mudança é enviada para o ProDoctor pela API.
+
+**Pré-requisitos:**
+
+1. Na sua chave do ProDoctor, adicione a permissão **"Alterar na
+   Agenda"** (Painel ProDoctor → Cadastros → Permissões da chave).
+   Sem isso o ProDoctor recusa as alterações com erro 401.
+
+2. No Vercel → Settings → Environment Variables, adicione:
+
+| Nome da variável | Valor |
+|---|---|
+| `EDIT_PIN` | Um número de 4 a 8 dígitos. Quem souber pode editar. |
+
+Marque para **Production, Preview e Development**.
+
+3. Redeploy.
+
+**Como usar:**
+
+1. No header de qualquer painel, aparece um botão de cadeado fechado
+   (ao lado do botão de beep).
+2. Clique → janela pede o PIN. Digite e confirme.
+3. Cadeado fica amarelo aberto: modo edição ligado nesta aba.
+4. Clique em qualquer card → modal com todos os destinos abre.
+5. Escolha o destino → o paciente migra (em até 5s o card pula de
+   coluna em todos os painéis abertos).
+6. Para travar, clique no cadeado de novo (ou feche a aba — o PIN
+   não persiste entre sessões).
+
+**Observações:**
+
+- O PIN fica em `sessionStorage` do navegador (some quando a aba fecha).
+  Cada TV pode ter o cadeado independente.
+- Sem `EDIT_PIN` configurado no Vercel, o cadeado fica desabilitado
+  com tooltip explicando.
+- Mudanças feitas pelo painel são gravadas no histórico do Firestore
+  (Fase A) — aparecem no dashboard normalmente.
+
 ### 4. Fazer o primeiro deploy
 
 Clique em **Deploy** no Vercel. Em 1-2 minutos a página estará no ar.

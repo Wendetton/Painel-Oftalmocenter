@@ -18,10 +18,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import AcaoMoverCard from "@/components/AcaoMoverCard";
 import CardPaciente, { severidadeCard } from "@/components/CardPaciente";
 import PainelLayout from "@/components/PainelLayout";
 import { useBeepEntradaEstagio } from "@/hooks/useBeepEntradaEstagio";
 import { useMedicosSelecionados } from "@/hooks/useMedicosSelecionados";
+import { useModoEdicao } from "@/hooks/useModoEdicao";
+import { useMoverPaciente } from "@/hooks/useMoverPaciente";
 import { usePainel } from "@/hooks/usePainel";
 import { usePreferenciaBeep } from "@/hooks/usePreferenciaBeep";
 import { calcularMetricasDia } from "@/lib/calcularMetricas";
@@ -35,6 +38,9 @@ export default function ConsultorioPage() {
   const { cards, atualizadoEm, fonteOnline, ultimoErro, carregandoInicial } =
     usePainel(codigos);
   const { ligado: beepLigado, alternar: alternarBeep } = usePreferenciaBeep();
+  const edicao = useModoEdicao();
+  const { mover } = useMoverPaciente(edicao.pin);
+  const [cardSelecionado, setCardSelecionado] = useState<CardData | null>(null);
 
   useBeepEntradaEstagio({
     cards,
@@ -77,6 +83,10 @@ export default function ConsultorioPage() {
       atualizadoEm={atualizadoEm}
       beepLigado={beepLigado}
       onAlternarBeep={alternarBeep}
+      edicaoLigada={edicao.ligado}
+      edicaoConfiguradaNoServidor={edicao.configuradoNoServidor}
+      onDestravarEdicao={edicao.destravar}
+      onTravarEdicao={edicao.travar}
     >
       {!hidratado ? (
         <Status mensagem="Carregando preferências…" />
@@ -103,7 +113,14 @@ export default function ConsultorioPage() {
             ) : (
               <div className="flex flex-col gap-3">
                 {grupos.prontos.map((card) => (
-                  <CardPaciente key={card.agendamentoId} card={card} />
+                  <CardPaciente
+                    key={card.agendamentoId}
+                    card={card}
+                    clicavel={edicao.ligado}
+                    onClick={
+                      edicao.ligado ? () => setCardSelecionado(card) : undefined
+                    }
+                  />
                 ))}
               </div>
             )}
@@ -166,6 +183,19 @@ export default function ConsultorioPage() {
             </section>
           </aside>
         </div>
+      )}
+
+      {cardSelecionado && (
+        <AcaoMoverCard
+          card={cardSelecionado}
+          onFechar={() => setCardSelecionado(null)}
+          onMover={async (destino) => {
+            if (!cardSelecionado.chaveAgendamento) {
+              return { ok: false, mensagem: "Sem dados do agendamento." };
+            }
+            return mover(cardSelecionado.chaveAgendamento, destino);
+          }}
+        />
       )}
     </PainelLayout>
   );
