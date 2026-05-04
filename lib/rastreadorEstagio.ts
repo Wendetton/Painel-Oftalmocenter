@@ -28,24 +28,57 @@ interface EntradaRastreador {
   desdeEm: number;
 }
 
+export interface ResultadoRastreador {
+  /** Timestamp (ms epoch) de quando o servidor primeiro viu o card neste estágio. */
+  desdeEm: number;
+  /**
+   * `true` quando observamos uma TRANSIÇÃO real de estágio (o anterior era
+   * diferente). `false` na primeira aparição do agendamento (que pode ser
+   * apenas um cold start vendo um card que já estava lá há horas) e quando
+   * o estágio se manteve.
+   *
+   * O consumidor (event logger do Firestore) usa isso para evitar gravar
+   * eventos espúrios após cold starts.
+   */
+  transicaoObservada: boolean;
+  /** Estágio anterior, ou null se primeira aparição. */
+  estagioAnterior: EstagioPaciente | null;
+}
+
 const rastreador = new Map<string, EntradaRastreador>();
 
 /**
- * Registra ou atualiza um agendamento. Devolve o timestamp (ms) de quando
- * o paciente entrou no estágio atual segundo o ponto de vista do servidor.
+ * Registra ou atualiza um agendamento. Devolve o instante em que o paciente
+ * entrou no estágio atual + se isso foi uma transição real ou primeira
+ * aparição.
  */
 export function registrarEstagio(
   agendamentoId: string,
   estagio: EstagioPaciente,
-): number {
+): ResultadoRastreador {
   const agora = Date.now();
   const entrada = rastreador.get(agendamentoId);
 
-  const desdeEm =
-    !entrada || entrada.estagio !== estagio ? agora : entrada.desdeEm;
+  let desdeEm: number;
+  let transicaoObservada: boolean;
+  let estagioAnterior: EstagioPaciente | null;
+
+  if (!entrada) {
+    desdeEm = agora;
+    transicaoObservada = false; // primeira aparição: não temos certeza de que houve transição agora
+    estagioAnterior = null;
+  } else if (entrada.estagio !== estagio) {
+    desdeEm = agora;
+    transicaoObservada = true;
+    estagioAnterior = entrada.estagio;
+  } else {
+    desdeEm = entrada.desdeEm;
+    transicaoObservada = false;
+    estagioAnterior = entrada.estagio;
+  }
 
   rastreador.set(agendamentoId, { estagio, desdeEm });
-  return desdeEm;
+  return { desdeEm, transicaoObservada, estagioAnterior };
 }
 
 /**

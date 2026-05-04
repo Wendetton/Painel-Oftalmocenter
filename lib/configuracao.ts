@@ -111,3 +111,19 @@ export function dataDeHojeBrasil(): string {
   });
   return fmt.format(new Date());
 }
+
+/**
+ * Devolve a data de hoje no formato YYYY-MM-DD (ISO) usando o fuso de
+ * São Paulo. Esse formato ordena alfabeticamente como ordena no calendário,
+ * ideal para o campo `data` dos eventos do Firestore (queries por intervalo
+ * funcionam direto com strings).
+ */
+export function dataYYYYMMDDBrasil(referencia: Date = new Date()): string {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  return fmt.format(referencia); // en-CA já produz "YYYY-MM-DD"
+}

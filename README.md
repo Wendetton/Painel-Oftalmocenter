@@ -51,6 +51,64 @@ Variables**), adicione **5 variáveis**:
 
 Marque as 5 como disponíveis para **Production, Preview e Development**.
 
+### 3.1 (Opcional) Conectar o Firebase para guardar histórico
+
+Os 3 painéis funcionam **sem o Firebase** — esta etapa é opcional.
+
+Quando configurado, o servidor passa a gravar no Firestore cada vez que
+um paciente troca de estágio (ex.: vai da Recepção para a Sala de
+Exames). Esses eventos viram a base de dados para o **dashboard de
+análise** que vamos construir depois (tempo médio na recepção,
+comparativo entre convênios, etc.).
+
+**Como configurar (uma vez só, ~5 minutos):**
+
+1. Acesse https://console.firebase.google.com e clique em **Adicionar
+   projeto**. Pode chamar de "painel-oftalmocenter".
+2. Pode desabilitar o Google Analytics (não usamos).
+3. Quando o projeto abrir, no menu lateral clique em **Build → Firestore
+   Database** → **Create database**.
+4. Escolha **Production mode** (a regra padrão bloqueia tudo, mas o
+   nosso código usa o Admin SDK que tem permissão automática).
+5. Em **Cloud Firestore location**, selecione `southamerica-east1`
+   (São Paulo) — fica mais perto.
+6. Clique em **Enable** e espere alguns segundos.
+7. Volte ao menu lateral, clique no **engrenagem** ao lado de "Project
+   Overview" → **Project settings** → aba **Service accounts**.
+8. Clique em **Generate new private key** → **Generate key**. Vai
+   baixar um arquivo JSON.
+9. Abra esse arquivo num editor de texto e copie **todo** o conteúdo.
+10. No Vercel, vá em **Settings → Environment Variables** e adicione:
+
+| Nome da variável | Valor |
+|---|---|
+| `FIREBASE_SERVICE_ACCOUNT` | (cole o JSON inteiro do arquivo do passo 9) |
+
+Marque para **Production, Preview e Development**.
+
+11. Vá em **Deployments**, abra o último deploy e clique nos `...` →
+    **Redeploy**.
+
+**Como confirmar que funcionou:**
+
+Acesse `https://SUA-URL.vercel.app/api/diagnostico` e procure pelo
+campo `firebase`. Você deve ver:
+
+```json
+"firebase": {
+  "configurado": true,
+  "inicializado": true,
+  "projectId": "painel-oftalmocenter-XXXX",
+  "escritaTeste": { "ok": true, "duracaoMs": 200 }
+}
+```
+
+Daí em diante, toda transição de estágio detectada pelo painel é
+gravada no Firestore na coleção `eventosEstagio`. Para conferir, abra
+o **Firebase Console → Firestore Database** e olhe a coleção — depois
+de alguns pacientes passarem pelo painel, você verá os documentos
+aparecendo lá.
+
 ### 4. Fazer o primeiro deploy
 
 Clique em **Deploy** no Vercel. Em 1-2 minutos a página estará no ar.

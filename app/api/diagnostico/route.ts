@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { obterFirestore, statusFirebase } from "@/lib/firebase";
+
 /**
  * Endpoint de diagnóstico — só serve para depurar problemas de configuração
  * sem precisar abrir os logs do Vercel.
@@ -107,14 +109,64 @@ export async function GET(): Promise<NextResponse> {
     }),
   );
 
+  // Status do Firebase + sondagem real (try a write+delete on a temp doc).
+  const firebase = await diagnosticoFirebase();
+
   return NextResponse.json({
     config,
     sondagens,
+    firebase,
     dicas: [
-      "Se a 'configurada' for false em qualquer variável crítica, adicione no Vercel → Settings → Environment Variables e refaça o deploy.",
+      "Se 'configurada' for false em qualquer variável crítica, adicione no Vercel → Settings → Environment Variables e refaça o deploy.",
       "Nas sondagens, qualquer URL que devolva 'ok: true' (mesmo com status 404) significa que o host existe e responde. Use essa como PRODOCTOR_API_URL.",
       "Erro 'getaddrinfo ENOTFOUND' significa que o domínio não existe — tente outra URL candidata.",
       "Erro 'fetch failed' sem causaErro pode indicar que o host bloqueia chamadas vindas dos servidores Vercel.",
+      "Para Firebase: 'configurado: false' significa que falta a variável FIREBASE_SERVICE_ACCOUNT no Vercel. 'inicializado: false' com 'configurado: true' indica JSON inválido ou credencial revogada.",
     ],
   });
+}
+
+async function diagnosticoFirebase(): Promise<{
+  configurado: boolean;
+  inicializado: boolean;
+  erro: string | null;
+  projectId: string | null;
+  escritaTeste: { ok: boolean; erro: string | null; duracaoMs: number };
+}> {
+  const status = statusFirebase();
+  const fs = obterFirestore();
+
+  // Sondagem de escrita: cria um doc temporário e apaga em seguida.
+  // Confirma que: (a) o init de fato funciona, (b) a regra de segurança
+  // do Admin SDK aceita writes na coleção de testes.
+  const escritaTeste: { ok: boolean; erro: string | null; duracaoMs: number } = {
+    ok: false,
+    erro: null,
+    duracaoMs: 0,
+  };
+  if (fs) {
+    const inicio = Date.now();
+    try {
+      const ref = await fs.collection("_diagnostico").add({
+        timestamp: new Date(),
+        origem: "/api/diagnostico",
+      });
+      await ref.delete();
+      escritaTeste.ok = true;
+    } catch (err) {
+      escritaTeste.erro = err instanceof Error ? err.message : "Erro desconhecido";
+    } finally {
+      escritaTeste.duracaoMs = Date.now() - inicio;
+    }
+  } else {
+    escritaTeste.erro = "Firestore não disponível";
+  }
+
+  return {
+    configurado: status.configurado,
+    inicializado: status.inicializado,
+    erro: status.erro,
+    projectId: status.projectId,
+    escritaTeste,
+  };
 }
