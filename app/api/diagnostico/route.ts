@@ -133,7 +133,10 @@ async function diagnosticoFirebase(): Promise<{
   projectId: string | null;
   escritaTeste: { ok: boolean; erro: string | null; duracaoMs: number };
 }> {
-  const status = statusFirebase();
+  // Importante: chama obterFirestore() ANTES de statusFirebase() para
+  // que a tentativa de init aconteça e o status reporte o estado real.
+  // (Caso contrário a primeira chamada sempre diria "Não inicializado
+  // ainda" mesmo quando o init funciona logo em seguida.)
   const fs = obterFirestore();
 
   // Sondagem de escrita: cria um doc temporário e apaga em seguida.
@@ -161,6 +164,9 @@ async function diagnosticoFirebase(): Promise<{
   } else {
     escritaTeste.erro = "Firestore não disponível";
   }
+
+  // Status agora reflete o estado pós-init.
+  const status = statusFirebase();
 
   return {
     configurado: status.configurado,
