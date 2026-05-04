@@ -4,6 +4,7 @@ import { classificarEstagio } from "@/lib/classificador";
 import { dataYYYYMMDDBrasil } from "@/lib/configuracao";
 import {
   carregarEstadosDoDia,
+  consultarEstadoAtual,
   salvarEstadoAtual,
 } from "@/lib/estadoAtualPersistente";
 import { gravarEventoTransicao } from "@/lib/eventoEstagio";
@@ -12,6 +13,7 @@ import {
   buscarIdadePaciente,
 } from "@/lib/prodoctor-client";
 import {
+  forcarEntrada,
   hidratarEstados,
   jaHidratadoPara,
   limparAusentes,
@@ -109,7 +111,8 @@ export async function GET(req: Request): Promise<NextResponse<RespostaPainel>> {
 
     const idsAtivos = new Set<string>();
 
-    const cards: CardPaciente[] = agendamentos.map((ag) => {
+    const cards: CardPaciente[] = await Promise.all(
+      agendamentos.map(async (ag) => {
       const estado = ag.estadoAgendaConsulta;
       const codigoPaciente = ag.paciente?.codigo ?? null;
       const idade =
@@ -123,15 +126,36 @@ export async function GET(req: Request): Promise<NextResponse<RespostaPainel>> {
       // - Pedimos ao rastreador o instante em que o servidor primeiro viu
       //   o card naquele estágio (ou hidratado do Firestore na primeira
       //   chamada após cold start).
-      // - Em primeira aparição OU transição: persistimos o estado no
-      //   Firestore (lib/estadoAtualPersistente) → próxima instância /
-      //   próxima TV consegue ler o mesmo cronômetro.
-      // - Em transição real (mudou de estágio): além de persistir,
-      //   gravamos um evento na coleção `eventosEstagio` (Fase A do
-      //   dashboard de análise).
+      // - Defesa em profundidade: se o rastreador disser "primeira
+      //   aparição", consultamos o Firestore individualmente. Se já
+      //   existe doc para esse agendamentoId no mesmo estágio, usamos o
+      //   desdeEm de lá (Firestore = fonte de verdade entre instâncias).
+      //   Isso fecha o gap quando uma instância "perde" o estado em
+      //   memória mas o Firestore tem.
+      // - Em primeira aparição (real) OU transição: persistimos no
+      //   Firestore (lib/estadoAtualPersistente).
+      // - Em transição real: gravamos evento na coleção `eventosEstagio`.
       let estagioDesdeEm: string | null = null;
       if (estagio !== "AGENDADO" && estagio !== "FALTOU") {
-        const resultado = registrarEstagio(agendamentoId, estagio);
+        let resultado = registrarEstagio(agendamentoId, estagio);
+
+        if (resultado.primeiraAparicao) {
+          // Defesa: confirma no Firestore antes de assumir que é mesmo
+          // primeira aparição (= cronômetro do zero).
+          const existente = await consultarEstadoAtual(agendamentoId);
+          if (existente && existente.estagio === estagio) {
+            // Já existe no Firestore com o mesmo estágio. Sincroniza a
+            // memória e usa o desdeEm canônico.
+            forcarEntrada(agendamentoId, estagio, existente.desdeEmMs);
+            resultado = {
+              desdeEm: existente.desdeEmMs,
+              primeiraAparicao: false,
+              transicaoObservada: false,
+              estagioAnterior: estagio,
+            };
+          }
+        }
+
         estagioDesdeEm = new Date(resultado.desdeEm).toISOString();
 
         if (resultado.primeiraAparicao || resultado.transicaoObservada) {
@@ -198,7 +222,8 @@ export async function GET(req: Request): Promise<NextResponse<RespostaPainel>> {
               }
             : null,
       };
-    });
+    }),
+    );
 
     // GC: remove do rastreador agendamentos que sumiram da agenda do dia
     // (cancelados, próximo dia já chegou, etc.).

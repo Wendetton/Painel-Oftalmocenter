@@ -85,6 +85,20 @@ export function jaHidratadoPara(data: string): boolean {
 }
 
 /**
+ * Substitui (sobrescreve) a entrada de um agendamento no rastreador
+ * com um valor específico. Usado quando descobrimos via lookup pontual
+ * no Firestore que o paciente já tinha desdeEm registrado, mas o Map
+ * em memória estava sem essa info.
+ */
+export function forcarEntrada(
+  agendamentoId: string,
+  estagio: EstagioPaciente,
+  desdeEmMs: number,
+): void {
+  rastreador.set(agendamentoId, { estagio, desdeEm: desdeEmMs });
+}
+
+/**
  * Registra ou atualiza um agendamento. Devolve o instante em que o paciente
  * entrou no estágio atual + flags indicando primeira aparição/transição.
  */
