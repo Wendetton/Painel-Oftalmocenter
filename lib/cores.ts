@@ -24,9 +24,12 @@ export const CORES_POR_ESTAGIO: Record<EstagioPaciente, CoresEstagio> = {
     rotulo: "Recepção",
   },
   SALA_EXAMES: {
-    bg: "#FAEEDA",
-    borda: "#854F0B",
-    texto: "#412402",
+    // Amarelo vivo (Fernando, pós-validação): a barra lateral fica visível
+    // de longe na TV. O texto principal da etiqueta usa um tom escuro pra
+    // manter contraste e legibilidade.
+    bg: "#FEF9C3",
+    borda: "#EAB308",
+    texto: "#713F12",
     rotulo: "Sala de exames",
   },
   PRONTO_MEDICO: {

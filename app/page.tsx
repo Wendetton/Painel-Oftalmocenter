@@ -55,29 +55,9 @@ export default function HomePage() {
         ))}
       </section>
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-          Análise
-        </p>
-        <h2 className="mt-1 text-xl font-semibold text-slate-900">
-          Dashboard de tempos e volumes
-        </h2>
-        <p className="mt-1 text-sm text-slate-600">
-          Tempo médio em cada estágio, distribuição por convênio, picos de
-          movimento, pacientes por médico — calculados a partir do histórico
-          gravado no Firestore.
-        </p>
-        <Link
-          href="/dashboard"
-          className="mt-4 inline-block text-sm font-medium text-blue-700 hover:underline"
-        >
-          Abrir dashboard →
-        </Link>
-      </section>
-
       <footer className="mt-auto border-t border-slate-200 pt-6 text-xs text-slate-500">
-        Os 3 painéis estão em produção. Ajustes finos seguem na Fase 5
-        conforme uso real da equipe.
+        Cada TV deve ficar fixa em uma das 3 URLs acima. Os painéis
+        atualizam sozinhos.
       </footer>
     </main>
   );
