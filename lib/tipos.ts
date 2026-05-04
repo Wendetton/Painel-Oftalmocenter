@@ -95,6 +95,21 @@ export interface AgendamentoProDoctor {
 // pronto para o frontend desenhar cards. Inclui idade quando disponível.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Identificação completa de um agendamento no ProDoctor.
+ * Necessária para chamar PATCH /api/v1/Agenda/AlterarStatus (modo edição).
+ * O painel envia este objeto de volta ao backend ao executar uma transição
+ * de estado, evitando que o servidor precise reconstruir os campos.
+ */
+export interface ChaveAgendamento {
+  localCodigo: number;
+  usuarioCodigo: number;
+  /** "DD/MM/YYYY" — formato exigido pela API ProDoctor. */
+  data: string;
+  /** "HH:mm" — formato exigido pela API ProDoctor. */
+  hora: string;
+}
+
 export interface CardPaciente {
   agendamentoId: string;
   estagio: EstagioPaciente;
@@ -121,6 +136,11 @@ export interface CardPaciente {
   horaAtendimento: string | null;
   horaAtendido: string | null;
   tipoAgendamento: TipoAgendamento | null;
+  /**
+   * Chave para mutações no ProDoctor. Ausente quando faltam dados (ex.:
+   * agendamento sem código de local), o que torna o card não-editável.
+   */
+  chaveAgendamento: ChaveAgendamento | null;
 }
 
 export interface RespostaPainel {

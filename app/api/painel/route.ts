@@ -142,6 +142,18 @@ export async function GET(req: Request): Promise<NextResponse<RespostaPainel>> {
         horaAtendimento: estado?.horaAtendimento ?? null,
         horaAtendido: estado?.horaAtendido ?? null,
         tipoAgendamento: ag.tipoAgendamento ?? TIPO_VAZIO,
+        chaveAgendamento:
+          typeof ag.localProDoctor?.codigo === "number" &&
+          typeof ag.usuario?.codigo === "number" &&
+          ag.data &&
+          ag.hora
+            ? {
+                localCodigo: ag.localProDoctor.codigo,
+                usuarioCodigo: ag.usuario.codigo,
+                data: ag.data,
+                hora: ag.hora,
+              }
+            : null,
       };
     });
 
