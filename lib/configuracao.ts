@@ -46,6 +46,32 @@ export const APELIDOS_MEDICOS: Record<number, string> = {
 };
 
 /**
+ * Cor identificadora de cada médico (tag colorida no card). Cores
+ * escolhidas para não conflitar com a paleta dos estágios (vermelho,
+ * amarelo, laranja, roxo, azul-escuro, cinza). Adicionar/alterar é só
+ * editar este mapa.
+ *
+ * Médicos sem entrada aqui exibem uma tag cinza neutra como fallback.
+ */
+export interface CorMedico {
+  bg: string;
+  texto: string;
+}
+
+export const CORES_MEDICOS: Record<number, CorMedico> = {
+  2: { bg: "#0EA5E9", texto: "#FFFFFF" }, // Dr Paulo · Sky / azul-piscina
+  3: { bg: "#EC4899", texto: "#FFFFFF" }, // Dra Lilian · Pink / rosa
+  4: { bg: "#10B981", texto: "#FFFFFF" }, // Dr Fernando · Emerald / verde
+};
+
+const COR_MEDICO_FALLBACK: CorMedico = { bg: "#475569", texto: "#FFFFFF" };
+
+export function corMedico(codigo: number | null): CorMedico {
+  if (codigo === null) return COR_MEDICO_FALLBACK;
+  return CORES_MEDICOS[codigo] ?? COR_MEDICO_FALLBACK;
+}
+
+/**
  * Devolve o apelido curto do médico se houver, senão o nome completo.
  * Usado nos cards (ver components/CardPaciente.tsx).
  */
