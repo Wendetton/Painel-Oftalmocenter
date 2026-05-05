@@ -1,21 +1,22 @@
 "use client";
 
 /**
- * Painel da Recepção (PLANEJAMENTO seção 4.4).
+ * Painel da Recepção (PLANEJAMENTO seção 4.4) — pós-feedback de uso.
  *
- * Layout: 3 colunas
+ * Layout: 2 colunas (a equipe pediu pra remover "Próximos a chegar" —
+ * quem está agendado mas ainda não chegou não é informação útil pra
+ * recepção operar):
  *   1. Em recepção (vermelho) — pacientes em compareceu puro
  *   2. Em dilatação (roxo) — compartilhada com Sala de Exames
- *   3. Próximos a chegar (cinza, sem cronômetro) — agendamentos do dia
  *
- * Cards reordenados em cada coluna por severidade (alertas no topo) e
- * por horário no caso de empate.
+ * Cards em cada coluna são ordenados por TEMPO NO ESTÁGIO (mais antigo
+ * primeiro): quem está esperando há mais tempo aparece no topo.
  */
 
 import { useEffect, useMemo, useState } from "react";
 
 import AcaoMoverCard from "@/components/AcaoMoverCard";
-import { severidadeCard } from "@/components/CardPaciente";
+import { tempoNoEstagioMs } from "@/components/CardPaciente";
 import ColunaCards from "@/components/ColunaCards";
 import PainelLayout from "@/components/PainelLayout";
 import { useBeepEntradaEstagio } from "@/hooks/useBeepEntradaEstagio";
@@ -44,8 +45,8 @@ export default function RecepcaoPage() {
     habilitado: beepLigado,
   });
 
-  // Tick periódico para reordenação por severidade (cards podem migrar
-  // de "atenção" para "alerta" só pelo tempo passando).
+  // Tick periódico para reordenar por tempo no estágio mesmo quando o
+  // painel não recebeu novo dado da API.
   const [tickOrdenacao, setTickOrdenacao] = useState(0);
   useEffect(() => {
     const t = setInterval(() => setTickOrdenacao((v) => v + 1), 5_000);
@@ -55,9 +56,8 @@ export default function RecepcaoPage() {
   const colunas = useMemo(() => {
     const agora = new Date();
     return {
-      recepcao: ordenarPorSeveridade(filtrar(cards, "RECEPCAO"), agora),
-      dilatacao: ordenarPorSeveridade(filtrar(cards, "DILATACAO"), agora),
-      proximos: ordenarPorHorario(filtrar(cards, "AGENDADO")),
+      recepcao: ordenarPorTempoEsperando(filtrar(cards, "RECEPCAO"), agora),
+      dilatacao: ordenarPorTempoEsperando(filtrar(cards, "DILATACAO"), agora),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cards, tickOrdenacao]);
@@ -89,7 +89,7 @@ export default function RecepcaoPage() {
       ) : carregandoInicial ? (
         <Status mensagem="Buscando agendamentos do dia…" />
       ) : (
-        <div className="grid gap-6 lg:grid-cols-3">
+        <div className="grid gap-6 lg:grid-cols-2">
           <ColunaCards
             titulo="Em recepção"
             estagioCor="RECEPCAO"
@@ -103,14 +103,6 @@ export default function RecepcaoPage() {
             estagioCor="DILATACAO"
             cards={colunas.dilatacao}
             mensagemVazio="Ninguém dilatando agora."
-            modoEdicao={edicao.ligado}
-            onClickCard={setCardSelecionado}
-          />
-          <ColunaCards
-            titulo="Próximos a chegar"
-            estagioCor="AGENDADO"
-            cards={colunas.proximos}
-            mensagemVazio="Nada agendado a partir deste momento."
             modoEdicao={edicao.ligado}
             onClickCard={setCardSelecionado}
           />
@@ -159,17 +151,15 @@ function filtrar(cards: CardData[], estagio: EstagioPaciente): CardData[] {
   return cards.filter((c) => c.estagio === estagio);
 }
 
-function ordenarPorSeveridade(cards: CardData[], agora: Date): CardData[] {
+/**
+ * Ordena por tempo no estágio em ordem DECRESCENTE (mais antigo no
+ * topo). Em caso de empate, fallback pelo horário de agendamento.
+ */
+function ordenarPorTempoEsperando(cards: CardData[], agora: Date): CardData[] {
   return [...cards].sort((a, b) => {
-    const sa = severidadeCard(a, agora);
-    const sb = severidadeCard(b, agora);
-    if (sa !== sb) return sb - sa;
+    const ta = tempoNoEstagioMs(a, agora);
+    const tb = tempoNoEstagioMs(b, agora);
+    if (ta !== tb) return tb - ta;
     return (a.horarioAgendamento ?? "").localeCompare(b.horarioAgendamento ?? "");
   });
-}
-
-function ordenarPorHorario(cards: CardData[]): CardData[] {
-  return [...cards].sort((a, b) =>
-    (a.horarioAgendamento ?? "").localeCompare(b.horarioAgendamento ?? ""),
-  );
 }
