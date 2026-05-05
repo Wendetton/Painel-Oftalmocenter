@@ -1,21 +1,21 @@
 "use client";
 
 /**
- * Painel da Sala de Exames (PLANEJAMENTO seção 4.5).
+ * Painel da Sala de Exames (PLANEJAMENTO seção 4.5) — pós-feedback de uso.
  *
- * 3 colunas:
+ * 2 colunas (a equipe pediu pra remover "Aguardando vir" — quem está
+ * na recepção é informação útil pra recepção, não pra equipe de exames):
  *   1. Em exames (amarelo) — pacientes em SALA_EXAMES.
  *   2. Em dilatação (roxo) — compartilhada com Recepção.
- *   3. Aguardando vir (cinza/recepção) — pacientes em RECEPÇÃO que em
- *      breve serão liberados pra sala.
  *
  * Métrica central: "Examinados" (passaram pela sala hoje).
+ * Cards ordenados por TEMPO NO ESTÁGIO (mais antigo no topo).
  */
 
 import { useEffect, useMemo, useState } from "react";
 
 import AcaoMoverCard from "@/components/AcaoMoverCard";
-import { severidadeCard } from "@/components/CardPaciente";
+import { tempoNoEstagioMs } from "@/components/CardPaciente";
 import ColunaCards from "@/components/ColunaCards";
 import PainelLayout from "@/components/PainelLayout";
 import { useBeepEntradaEstagio } from "@/hooks/useBeepEntradaEstagio";
@@ -53,9 +53,8 @@ export default function ExamesPage() {
   const colunas = useMemo(() => {
     const agora = new Date();
     return {
-      exames: ordenarPorSeveridade(filtrar(cards, "SALA_EXAMES"), agora),
-      dilatacao: ordenarPorSeveridade(filtrar(cards, "DILATACAO"), agora),
-      aguardando: ordenarPorHorario(filtrar(cards, "RECEPCAO")),
+      exames: ordenarPorTempoEsperando(filtrar(cards, "SALA_EXAMES"), agora),
+      dilatacao: ordenarPorTempoEsperando(filtrar(cards, "DILATACAO"), agora),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cards, tickOrdenacao]);
@@ -88,7 +87,7 @@ export default function ExamesPage() {
       ) : carregandoInicial ? (
         <Status mensagem="Buscando agendamentos do dia…" />
       ) : (
-        <div className="grid gap-6 lg:grid-cols-3">
+        <div className="grid gap-6 lg:grid-cols-2">
           <ColunaCards
             titulo="Em exames"
             estagioCor="SALA_EXAMES"
@@ -102,14 +101,6 @@ export default function ExamesPage() {
             estagioCor="DILATACAO"
             cards={colunas.dilatacao}
             mensagemVazio="Ninguém dilatando agora."
-            modoEdicao={edicao.ligado}
-            onClickCard={setCardSelecionado}
-          />
-          <ColunaCards
-            titulo="Aguardando vir"
-            estagioCor="RECEPCAO"
-            cards={colunas.aguardando}
-            mensagemVazio="Recepção está vazia."
             modoEdicao={edicao.ligado}
             onClickCard={setCardSelecionado}
           />
@@ -158,17 +149,11 @@ function filtrar(cards: CardData[], estagio: EstagioPaciente): CardData[] {
   return cards.filter((c) => c.estagio === estagio);
 }
 
-function ordenarPorSeveridade(cards: CardData[], agora: Date): CardData[] {
+function ordenarPorTempoEsperando(cards: CardData[], agora: Date): CardData[] {
   return [...cards].sort((a, b) => {
-    const sa = severidadeCard(a, agora);
-    const sb = severidadeCard(b, agora);
-    if (sa !== sb) return sb - sa;
+    const ta = tempoNoEstagioMs(a, agora);
+    const tb = tempoNoEstagioMs(b, agora);
+    if (ta !== tb) return tb - ta;
     return (a.horarioAgendamento ?? "").localeCompare(b.horarioAgendamento ?? "");
   });
-}
-
-function ordenarPorHorario(cards: CardData[]): CardData[] {
-  return [...cards].sort((a, b) =>
-    (a.horarioAgendamento ?? "").localeCompare(b.horarioAgendamento ?? ""),
-  );
 }

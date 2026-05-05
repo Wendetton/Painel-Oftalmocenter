@@ -19,7 +19,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import AcaoMoverCard from "@/components/AcaoMoverCard";
-import CardPaciente, { severidadeCard } from "@/components/CardPaciente";
+import CardPaciente, { tempoNoEstagioMs } from "@/components/CardPaciente";
 import PainelLayout from "@/components/PainelLayout";
 import { useBeepEntradaEstagio } from "@/hooks/useBeepEntradaEstagio";
 import { useMedicosSelecionados } from "@/hooks/useMedicosSelecionados";
@@ -58,7 +58,7 @@ export default function ConsultorioPage() {
 
   const grupos = useMemo(() => {
     const agora = new Date();
-    const prontos = ordenarPorSeveridade(filtrar(cards, "PRONTO_MEDICO"), agora);
+    const prontos = ordenarPorTempoEsperando(filtrar(cards, "PRONTO_MEDICO"), agora);
     return {
       prontos,
       contagemRecepcao: filtrar(cards, "RECEPCAO").length,
@@ -277,11 +277,13 @@ function filtrar(cards: CardData[], estagio: EstagioPaciente): CardData[] {
   return cards.filter((c) => c.estagio === estagio);
 }
 
-function ordenarPorSeveridade(cards: CardData[], agora: Date): CardData[] {
+function ordenarPorTempoEsperando(cards: CardData[], agora: Date): CardData[] {
+  // Mais antigo no topo: quem está esperando há mais tempo deve ser
+  // chamado primeiro pelo médico.
   return [...cards].sort((a, b) => {
-    const sa = severidadeCard(a, agora);
-    const sb = severidadeCard(b, agora);
-    if (sa !== sb) return sb - sa;
+    const ta = tempoNoEstagioMs(a, agora);
+    const tb = tempoNoEstagioMs(b, agora);
+    if (ta !== tb) return tb - ta;
     return (a.horarioAgendamento ?? "").localeCompare(b.horarioAgendamento ?? "");
   });
 }

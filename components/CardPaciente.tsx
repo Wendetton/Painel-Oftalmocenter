@@ -1,20 +1,22 @@
 "use client";
 
 /**
- * Card de paciente — refinamento visual "premium claro" com tipografia
- * dimensionada para TV (visualizada de 2-4 m).
+ * Card de paciente — versão COMPACTA pós-feedback de uso real.
  *
- * Hierarquia visual decidida em conversa com Fernando:
- * 1. Cronômetro DOMINANTE (48 px peso 700, tabular). É o primeiro
- *    elemento que o olho captura.
- * 2. Nome do paciente em destaque (30 px peso 600).
- * 3. Idade ao lado em peso normal (18 px).
- * 4. Etiqueta do estágio + ícone de tipo de agendamento (32 px) no topo.
- * 5. Linha de contexto (horário · médico · convênio) discreta.
- * 6. Faixa do complemento (quando há) sólida na cor do estágio.
+ * Mudanças em relação à versão "premium" anterior:
+ * - Cronômetro saiu da linha inferior dedicada e foi pra mesma linha
+ *   do header (etiqueta + tag médico + ícone de tipo). Economiza uma
+ *   linha vertical inteira → quase dobra a quantidade de cards visíveis
+ *   na tela sem rolagem.
+ * - Tamanhos ligeiramente reduzidos pra ganhar densidade sem perder
+ *   legibilidade na TV.
+ * - Padding interno reduzido (py-3 em vez de py-4).
  *
- * Aura sutil ao redor do card na cor do estágio (box-shadow rgba) deixa
- * o painel "respirando" sem virar ruído visual.
+ * Hierarquia visual mantida:
+ * 1. Cronômetro (36 px peso 700 tabular) ainda é o maior elemento.
+ * 2. Nome do paciente em destaque (24 px peso 600).
+ * 3. Etiqueta + tag médico identificam estágio e responsável.
+ * 4. Linha de contexto e complemento ficam discretos.
  */
 
 import Cronometro, { minutosDesdeIso, nivelDoCronometro } from "./Cronometro";
@@ -41,10 +43,10 @@ export default function CardPaciente({
 }: Props) {
   const cores = CORES_POR_ESTAGIO[card.estagio];
 
-  // Sombra colorida do estágio (aura sutil) + sombra base para profundidade.
-  const sombra = `0 1px 3px rgba(0,0,0,0.05), 0 8px 24px ${cores.sombra}`;
+  // Aura sutil colorida do estágio + sombra base para profundidade.
+  const sombra = `0 1px 3px rgba(0,0,0,0.05), 0 6px 18px ${cores.sombra}`;
   const estiloBase = {
-    borderLeft: `10px solid ${cores.borda}`,
+    borderLeft: `8px solid ${cores.borda}`,
     boxShadow: sombra,
   } as const;
 
@@ -58,12 +60,6 @@ export default function CardPaciente({
         title="Clique para mover este paciente"
       >
         <ConteudoCard card={card} subestado={subestado} cores={cores} />
-        <span
-          aria-hidden="true"
-          className="pointer-events-none absolute right-4 top-4 hidden text-xs font-bold uppercase tracking-widest text-blue-600 group-hover:inline"
-        >
-          mover →
-        </span>
       </button>
     );
   }
@@ -88,11 +84,12 @@ function ConteudoCard({
   cores: CoresEstagio;
 }) {
   return (
-    <div className="flex flex-1 flex-col gap-2 px-5 py-4">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2.5">
+    <div className="flex flex-1 flex-col gap-1.5 px-4 py-3">
+      {/* Linha 1: identificação + cronômetro juntos para economizar altura */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
           <p
-            className="text-xs font-bold uppercase tracking-[0.18em]"
+            className="text-[11px] font-bold uppercase tracking-[0.16em]"
             style={{ color: cores.borda }}
           >
             {cores.rotulo}
@@ -100,29 +97,43 @@ function ConteudoCard({
           <TagMedico
             codigo={card.medico.codigo}
             nomeCompleto={card.medico.nome}
+            tamanho="compacto"
           />
+          <IconeTipoAgendamento tipo={card.tipoAgendamento} size={24} />
         </div>
-        <IconeTipoAgendamento tipo={card.tipoAgendamento} size={32} />
+        {card.estagio === "AGENDADO" ? (
+          <span className="text-xl font-bold tabular-nums text-slate-700">
+            {card.horarioAgendamento ?? "—"}
+          </span>
+        ) : (
+          <Cronometro
+            desdeEm={card.estagioDesdeEm}
+            className="text-4xl font-bold leading-none"
+          />
+        )}
       </div>
 
-      <h3 className="text-3xl font-semibold leading-tight tracking-tight text-slate-900">
+      {/* Linha 2: nome do paciente (elemento de destaque) */}
+      <h3 className="text-2xl font-semibold leading-tight tracking-tight text-slate-900">
         {card.paciente.nome}
         {card.paciente.idade !== null && (
-          <span className="ml-2 text-lg font-normal text-slate-500">
+          <span className="ml-2 text-base font-normal text-slate-500">
             · {card.paciente.idade}
           </span>
         )}
       </h3>
 
-      <p className="text-sm text-slate-500">
+      {/* Linha 3: contexto curto */}
+      <p className="text-xs text-slate-500">
         {[card.horarioAgendamento, card.convenio]
           .filter((p): p is string => Boolean(p))
           .join(" · ")}
       </p>
 
+      {/* Linha 4 (opcional): complemento em faixa colorida */}
       {card.complemento && card.complemento.trim() !== "" && (
         <div
-          className="mt-1 flex items-start gap-2 rounded-lg px-3 py-2 text-base"
+          className="rounded-md px-2.5 py-1.5 text-sm"
           style={{ backgroundColor: cores.borda, color: "#FFFFFF" }}
         >
           <span className="font-semibold leading-snug line-clamp-2">
@@ -131,25 +142,36 @@ function ConteudoCard({
         </div>
       )}
 
-      <div className="mt-2 flex items-end justify-between gap-2">
-        <span className="text-xs uppercase tracking-widest text-slate-400">
-          {subestado ?? ""}
-        </span>
-        {card.estagio === "AGENDADO" ? (
-          <span className="text-2xl font-bold tabular-nums text-slate-700">
-            {card.horarioAgendamento ?? "—"}
-          </span>
-        ) : (
-          <Cronometro desdeEm={card.estagioDesdeEm} className="text-[40px] font-bold leading-none" />
-        )}
-      </div>
+      {/* Subestado só aparece se houver — não desperdiça altura quando vazio */}
+      {subestado && subestado.length > 0 && (
+        <p className="text-[11px] uppercase tracking-widest text-slate-400">
+          {subestado}
+        </p>
+      )}
     </div>
   );
 }
 
 /**
- * Helper exportado para reordenar listas: cards em alerta no topo.
- * AGENDADO/FALTOU não têm cronômetro → severidade -1.
+ * Helper exportado para reordenar listas. A regra mudou após feedback
+ * de uso real: agora ordenamos pelo TEMPO no estágio (mais antigo no
+ * topo) em vez de severidade + horário. Quem espera há mais tempo deve
+ * ser visto/atendido primeiro.
+ *
+ * Quem não tem cronômetro (AGENDADO/FALTOU) cai no fim — mas as colunas
+ * que mostram esses estágios geralmente usam ordenação por horário.
+ */
+export function tempoNoEstagioMs(card: CardPacienteData, agora: Date): number {
+  if (!card.estagioDesdeEm) return -1;
+  const t = Date.parse(card.estagioDesdeEm);
+  if (!Number.isFinite(t)) return -1;
+  return agora.getTime() - t;
+}
+
+/**
+ * Mantida apenas para compatibilidade — ainda pode ser útil no futuro
+ * para destacar visualmente cards em alerta. Não é mais usada como
+ * critério primário de ordenação.
  */
 export function severidadeCard(card: CardPacienteData, agora: Date): number {
   if (card.estagio === "AGENDADO" || card.estagio === "FALTOU") return -1;
