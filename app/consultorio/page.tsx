@@ -22,6 +22,7 @@ import AcaoMoverCard from "@/components/AcaoMoverCard";
 import CardPaciente, { tempoNoEstagioMs } from "@/components/CardPaciente";
 import PainelLayout from "@/components/PainelLayout";
 import { useBeepEntradaEstagio } from "@/hooks/useBeepEntradaEstagio";
+import { useCodigoMedico } from "@/hooks/useCodigoMedico";
 import { useMedicosSelecionados } from "@/hooks/useMedicosSelecionados";
 import { useModoEdicao } from "@/hooks/useModoEdicao";
 import { useMoverPaciente } from "@/hooks/useMoverPaciente";
@@ -41,6 +42,7 @@ export default function ConsultorioPage() {
   const { ligado: beepLigado, alternar: alternarBeep } = usePreferenciaBeep();
   const edicao = useModoEdicao();
   const { mover } = useMoverPaciente(edicao.pin);
+  const codigoMedico = useCodigoMedico();
   const [cardSelecionado, setCardSelecionado] = useState<CardData | null>(null);
 
   useBeepEntradaEstagio({
@@ -88,6 +90,10 @@ export default function ConsultorioPage() {
       edicaoConfiguradaNoServidor={edicao.configuradoNoServidor}
       onDestravarEdicao={edicao.destravar}
       onTravarEdicao={edicao.travar}
+      codigoMedicoEyenote={codigoMedico.codigo}
+      hidratadoCodigoMedico={codigoMedico.hidratado}
+      onDefinirCodigoMedico={codigoMedico.definir}
+      onLimparCodigoMedico={codigoMedico.limpar}
     >
       {!hidratado ? (
         <Status mensagem="Carregando preferências…" />
@@ -213,6 +219,7 @@ export default function ConsultorioPage() {
             }
             return mover(cardSelecionado.chaveAgendamento, destino);
           }}
+          codigoMedicoEyenote={codigoMedico.codigo}
         />
       )}
     </PainelLayout>
