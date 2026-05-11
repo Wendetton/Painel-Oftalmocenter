@@ -18,6 +18,7 @@
 import type { ReactNode } from "react";
 
 import BotaoBeep from "./BotaoBeep";
+import BotaoCodigoMedico from "./BotaoCodigoMedico";
 import BotaoMetricas from "./BotaoMetricas";
 import BotaoModoEdicao from "./BotaoModoEdicao";
 import { type MetricaCentral } from "./MetricasDoDia";
@@ -48,6 +49,11 @@ interface Props {
     pin: string,
   ) => Promise<{ ok: true } | { ok: false; mensagem: string }>;
   onTravarEdicao: () => void;
+  /** Código do médico no Eyenote (uso compartilhado com AcaoMoverCard). */
+  codigoMedicoEyenote: string | null;
+  hidratadoCodigoMedico: boolean;
+  onDefinirCodigoMedico: (codigo: string) => void;
+  onLimparCodigoMedico: () => void;
   children: ReactNode;
 }
 
@@ -68,6 +74,10 @@ export default function PainelLayout({
   edicaoConfiguradaNoServidor,
   onDestravarEdicao,
   onTravarEdicao,
+  codigoMedicoEyenote,
+  hidratadoCodigoMedico,
+  onDefinirCodigoMedico,
+  onLimparCodigoMedico,
   children,
 }: Props) {
   return (
@@ -90,6 +100,12 @@ export default function PainelLayout({
               metricaCentral={metricaCentral}
             />
             <BotaoBeep ligado={beepLigado} onAlternar={onAlternarBeep} />
+            <BotaoCodigoMedico
+              codigoAtual={codigoMedicoEyenote}
+              hidratado={hidratadoCodigoMedico}
+              onDefinir={onDefinirCodigoMedico}
+              onLimpar={onLimparCodigoMedico}
+            />
             <BotaoModoEdicao
               ligado={edicaoLigada}
               configuradoNoServidor={edicaoConfiguradaNoServidor}
