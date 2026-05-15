@@ -32,7 +32,7 @@ import {
 import {
   collection,
   doc,
-  getDocs,
+  getDocsFromServer,
   getFirestore,
   limit,
   query,
@@ -104,6 +104,50 @@ interface PacienteEyenoteResumo {
 
 const JANELA_REUSO_PACIENTE_MS = 6 * 60 * 60 * 1000;
 
+/**
+ * Cache em memória de pacientes criados/encontrados nesta sessão da TV.
+ *
+ * Resolve o caso mais comum de duplicata: a recepção tira AR, em seguida
+ * Tono, mas a segunda query do Firestore ainda vê o índice frio e não
+ * encontra o paciente que acabou de ser criado, gerando uma 2ª ficha.
+ *
+ * Chave: `${medicoCodigo}|${nomeNormalizado}`. Sobrevive a abrir/fechar
+ * o modal; só zera com reload da página.
+ */
+const cachePacienteSessao = new Map<
+  string,
+  { id: string; criadoEmMs: number }
+>();
+
+function chaveCacheSessao(medicoCodigo: string, nomePaciente: string): string {
+  return `${medicoCodigo}|${nomePaciente.trim().toLowerCase()}`;
+}
+
+function lerCacheSessao(
+  medicoCodigo: string,
+  nomePaciente: string,
+): string | null {
+  const k = chaveCacheSessao(medicoCodigo, nomePaciente);
+  const v = cachePacienteSessao.get(k);
+  if (!v) return null;
+  if (Date.now() - v.criadoEmMs > JANELA_REUSO_PACIENTE_MS) {
+    cachePacienteSessao.delete(k);
+    return null;
+  }
+  return v.id;
+}
+
+function gravarCacheSessao(
+  medicoCodigo: string,
+  nomePaciente: string,
+  id: string,
+): void {
+  cachePacienteSessao.set(chaveCacheSessao(medicoCodigo, nomePaciente), {
+    id,
+    criadoEmMs: Date.now(),
+  });
+}
+
 async function acharPacienteRecente(
   medicoCodigo: string,
   nomePaciente: string,
@@ -112,12 +156,14 @@ async function acharPacienteRecente(
 
   // Query simples por documentId — evita exigir índice composto.
   // Filtramos `name` + `status active` + `createdAt nas últimas 6h` no cliente.
+  // `getDocsFromServer` força ida à rede e evita servir cache local stale
+  // (era o caminho mais provável de gerar duplicata pós-criação).
   const q = query(
     collection(db, "patients"),
     where("documentId", "==", medicoCodigo),
     limit(100),
   );
-  const snap = await getDocs(q);
+  const snap = await getDocsFromServer(q);
 
   const limiteMs = Date.now() - JANELA_REUSO_PACIENTE_MS;
   let melhor: PacienteEyenoteResumo | null = null;
@@ -138,14 +184,19 @@ async function acharPacienteRecente(
             "seconds" in createdAt
           ? (createdAt as { seconds: number }).seconds * 1000
           : null;
-    if (ms === null || ms < limiteMs) continue;
 
-    if (!melhor || ms > (melhor.createdAtMs ?? 0)) {
+    // serverTimestamp() pendente pode chegar como null no read-back
+    // imediatamente após o setDoc — antes a gente descartava, agora
+    // tratamos como "acabou de ser criado" e seguimos comparando.
+    const msEfetivo = ms ?? Date.now();
+    if (msEfetivo < limiteMs) continue;
+
+    if (!melhor || msEfetivo > (melhor.createdAtMs ?? 0)) {
       melhor = {
         id: d.id,
         name: data.name,
         documentId: String(data.documentId ?? ""),
-        createdAtMs: ms,
+        createdAtMs: msEfetivo,
       };
     }
   }
@@ -212,13 +263,34 @@ export async function enviarExameParaEyenote(
     await garantirAutenticado();
     const { db, storage } = obterContexto();
 
-    const existente = await acharPacienteRecente(
-      opts.medicoCodigo.trim(),
-      opts.nomePaciente,
-    );
-    const patientId = existente
-      ? existente.id
-      : await criarPacienteNovo(opts.medicoCodigo.trim(), opts.nomePaciente);
+    const medicoCodigo = opts.medicoCodigo.trim();
+
+    // 1ª linha de defesa: cache em memória da sessão. Resolve o caso
+    // recepção tira AR e Tono em seguida sem depender de consistência
+    // eventual do Firestore.
+    const idEmCache = lerCacheSessao(medicoCodigo, opts.nomePaciente);
+
+    let patientId: string;
+    let reusado: boolean;
+
+    if (idEmCache) {
+      patientId = idEmCache;
+      reusado = true;
+    } else {
+      // 2ª linha: query no servidor (já força rede, ignora cache local).
+      const existente = await acharPacienteRecente(
+        medicoCodigo,
+        opts.nomePaciente,
+      );
+      if (existente) {
+        patientId = existente.id;
+        reusado = true;
+      } else {
+        patientId = await criarPacienteNovo(medicoCodigo, opts.nomePaciente);
+        reusado = false;
+      }
+      gravarCacheSessao(medicoCodigo, opts.nomePaciente, patientId);
+    }
 
     // Upload da imagem.
     const ext = extensaoDe(opts.arquivo);
@@ -240,7 +312,7 @@ export async function enviarExameParaEyenote(
       },
     });
 
-    return { ok: true, patientId, reusado: existente !== null };
+    return { ok: true, patientId, reusado };
   } catch (err) {
     const mensagem = err instanceof Error ? err.message : "Erro desconhecido";
     // eslint-disable-next-line no-console
