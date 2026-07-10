@@ -98,6 +98,34 @@ export function obterFirestore(): Firestore | null {
       });
     }
     firestoreCached = getFirestore(appCached);
+
+    // Ajustes de transporte/robustez — aplicados UMA vez por instância,
+    // antes do primeiro uso do Firestore.
+    //
+    // - preferRest: usa transporte REST/HTTP (stateless por requisição) em
+    //   vez de gRPC (canal persistente de longa duração). Em serverless
+    //   (Vercel), instâncias são congeladas/reaproveitadas e o canal gRPC
+    //   ocioso morre silenciosamente — a requisição seguinte reaproveita o
+    //   canal morto e fica presa em "Waiting for LB pick" até estourar
+    //   ~182s (DEADLINE_EXCEEDED), derrubando /api/painel com 502. REST não
+    //   tem canal ocioso, então esse modo de falha simplesmente some.
+    //   (Só operações de listener em tempo real exigem gRPC — não usamos.)
+    //
+    // - ignoreUndefinedProperties: evita INVALID_ARGUMENT quando algum
+    //   campo chega `undefined` num write.
+    //
+    // settings() só pode ser chamado uma vez por instância e antes do
+    // primeiro uso; se outra invocação da mesma lambda já configurou,
+    // o try/catch ignora.
+    try {
+      firestoreCached.settings({
+        preferRest: true,
+        ignoreUndefinedProperties: true,
+      });
+    } catch {
+      // Já configurada nesta instância — segue com a configuração vigente.
+    }
+
     ultimoErroInit = null;
     return firestoreCached;
   } catch (err) {

@@ -35,6 +35,7 @@
 
 import { FieldValue } from "firebase-admin/firestore";
 
+import { comTimeout } from "./comTimeout";
 import { obterFirestore } from "./firebase";
 import type { EstagioPaciente } from "./tipos";
 
@@ -71,10 +72,18 @@ export async function gravarEventoTransicao(
     // O Firestore aceita Date diretamente — converte para Timestamp internamente.
     // Adicionamos `criadoEm` (server timestamp) para auditar exatamente quando
     // o write chegou, separado do `momento` lógico da transição.
-    await fs.collection("eventosEstagio").add({
-      ...evento,
-      criadoEm: FieldValue.serverTimestamp(),
-    });
+    //
+    // Timeout de 6s: é fire-and-forget (o /api/painel não espera), mas
+    // sem teto a Promise podia segurar recursos da lambda por ~182s se o
+    // canal travasse. Se estourar, o catch abaixo loga e seguimos.
+    await comTimeout(
+      fs.collection("eventosEstagio").add({
+        ...evento,
+        criadoEm: FieldValue.serverTimestamp(),
+      }),
+      6000,
+      "gravarEventoTransicao",
+    );
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error("[firebase] Falha ao gravar evento de transição:", err);
