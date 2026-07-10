@@ -51,6 +51,8 @@ import {
   type FirebaseStorage,
 } from "firebase/storage";
 
+import { comTimeout } from "./comTimeout";
+
 /** Configuração pública do Firebase do projeto eyenotev2. */
 const firebaseConfigEyenote = {
   apiKey: "AIzaSyDB_pQbN52rfNR2QMEztkplc86GaBPy6Zw",
@@ -148,6 +150,33 @@ function gravarCacheSessao(
   });
 }
 
+const TIMEOUT_LEITURA_EYENOTE_MS = 4000;
+const PAUSA_RETRY_EYENOTE_MS = 500;
+
+/**
+ * Executa a leitura no servidor com timeout e 1 retry. Mantém a garantia
+ * de ir à rede (getDocsFromServer) mas tolera uma oscilação transitória
+ * do Starlink, que antes fazia o anexo de exame "dar erro" de vez.
+ */
+async function buscarDocsComRetry(
+  q: ReturnType<typeof query>,
+): Promise<Awaited<ReturnType<typeof getDocsFromServer>>> {
+  try {
+    return await comTimeout(
+      getDocsFromServer(q),
+      TIMEOUT_LEITURA_EYENOTE_MS,
+      "eyenote:acharPaciente",
+    );
+  } catch {
+    await new Promise((r) => setTimeout(r, PAUSA_RETRY_EYENOTE_MS));
+    return await comTimeout(
+      getDocsFromServer(q),
+      TIMEOUT_LEITURA_EYENOTE_MS,
+      "eyenote:acharPaciente(retry)",
+    );
+  }
+}
+
 async function acharPacienteRecente(
   medicoCodigo: string,
   nomePaciente: string,
@@ -163,7 +192,13 @@ async function acharPacienteRecente(
     where("documentId", "==", medicoCodigo),
     limit(100),
   );
-  const snap = await getDocsFromServer(q);
+
+  // A leitura no servidor é obrigatória (não podemos cair para cache local
+  // sob risco de reabrir o bug de ficha duplicada). Mas a rede da TV é
+  // Starlink e oscila: por isso, timeout de 4s + 1 retry com 500ms de
+  // pausa. Se as duas tentativas falharem, o erro propaga e vira
+  // { ok:false, mensagem } exibido ao usuário — sem duplicar ficha.
+  const snap = await buscarDocsComRetry(q);
 
   const limiteMs = Date.now() - JANELA_REUSO_PACIENTE_MS;
   let melhor: PacienteEyenoteResumo | null = null;

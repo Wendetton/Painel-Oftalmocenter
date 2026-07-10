@@ -28,6 +28,7 @@
 
 import { Timestamp } from "firebase-admin/firestore";
 
+import { comTimeout } from "./comTimeout";
 import { obterFirestore } from "./firebase";
 import type { EstagioPaciente } from "./tipos";
 
@@ -58,10 +59,16 @@ export async function consultarEstadoAtual(
   if (!fs) return null;
 
   try {
-    const snap = await fs
-      .collection("estadoAtual")
-      .doc(agendamentoId)
-      .get();
+    // Timeout de 6s: esta é a ÚNICA leitura do Firestore no caminho
+    // crítico do /api/painel (await na detecção de primeira aparição).
+    // É aqui que um canal travado congelava o quadro inteiro. Se estourar,
+    // o catch devolve null e o chamador assume primeira aparição (segue
+    // o fluxo normal, cronômetro em memória).
+    const snap = await comTimeout(
+      fs.collection("estadoAtual").doc(agendamentoId).get(),
+      6000,
+      "consultarEstadoAtual",
+    );
 
     if (!snap.exists) return null;
     const d = snap.data();
@@ -114,11 +121,19 @@ export async function carregarEstadosDoDia(
   }
 
   try {
-    const snap = await fs
-      .collection("estadoAtual")
-      .where("data", "==", data)
-      .limit(5_000)
-      .get();
+    // Timeout de 8s (um pouco mais de folga que o get individual — é uma
+    // query do dia inteiro, roda só no cold start). Se estourar, o catch
+    // devolve ok:false e o painel opera em memória pura até a próxima
+    // tentativa de hidratação.
+    const snap = await comTimeout(
+      fs
+        .collection("estadoAtual")
+        .where("data", "==", data)
+        .limit(5_000)
+        .get(),
+      8000,
+      "carregarEstadosDoDia",
+    );
 
     const estados = new Map<string, EstadoSalvo>();
     for (const doc of snap.docs) {
@@ -174,22 +189,30 @@ export async function salvarEstadoAtual(
   const ref = fs.collection("estadoAtual").doc(agendamentoId);
 
   try {
-    await fs.runTransaction(async (tx) => {
-      const snap = await tx.get(ref);
-      if (snap.exists) {
-        const d = snap.data();
-        if (d?.estagio === estagio) {
-          // Já existe doc para este estágio — mantém o desdeEm antigo.
-          // Atualiza só `atualizadoEm` para auditoria (last seen).
-          tx.update(ref, { atualizadoEm: new Date() });
-          return;
+    // Timeout de 6s envolvendo a transação inteira. É fire-and-forget
+    // (o /api/painel não espera), mas sem teto a transação podia pendurar
+    // recursos da lambda. A lógica de idempotência abaixo permanece
+    // idêntica — só ganhou o teto de tempo.
+    await comTimeout(
+      fs.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        if (snap.exists) {
+          const d = snap.data();
+          if (d?.estagio === estagio) {
+            // Já existe doc para este estágio — mantém o desdeEm antigo.
+            // Atualiza só `atualizadoEm` para auditoria (last seen).
+            tx.update(ref, { atualizadoEm: new Date() });
+            return;
+          }
+          // Estágio diferente: o paciente fez transição entre o último save
+          // e agora. Sobrescreve com o novo estagio + desdeEm.
         }
-        // Estágio diferente: o paciente fez transição entre o último save
-        // e agora. Sobrescreve com o novo estagio + desdeEm.
-      }
-      // Novo doc OU transição real: grava normalmente.
-      tx.set(ref, { estagio, desdeEm, data, atualizadoEm: new Date() });
-    });
+        // Novo doc OU transição real: grava normalmente.
+        tx.set(ref, { estagio, desdeEm, data, atualizadoEm: new Date() });
+      }),
+      6000,
+      "salvarEstadoAtual",
+    );
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error("[firebase] erro ao salvar estadoAtual:", err);
