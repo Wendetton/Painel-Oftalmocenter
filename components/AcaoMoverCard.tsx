@@ -21,6 +21,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { CORES_POR_ESTAGIO } from "@/lib/cores";
 import {
+  aquecerEnvioExame,
   enviarExameParaEyenote,
   ROTULOS_EXAMES_EYENOTE,
   type TipoExameEyenote,
@@ -114,6 +115,16 @@ export default function AcaoMoverCard({
     } else {
       setEstadoExame({ tipo, fase: "erro", mensagem: r.mensagem });
     }
+  };
+
+  // Ao tocar num botão de exame: dispara o aquecimento (autentica e procura
+  // a ficha no Eyenote em segundo plano enquanto a câmera está aberta) e só
+  // então abre a câmera. Quando a foto chega, normalmente só falta o upload.
+  const abrirCamera = (input: HTMLInputElement | null) => {
+    if (codigoMedicoEyenote) {
+      aquecerEnvioExame(codigoMedicoEyenote, card.paciente.nome);
+    }
+    input?.click();
   };
 
   // Separa destinos "operacionais" (mover entre setores) do "Faltou" (destrutivo).
@@ -217,7 +228,7 @@ export default function AcaoMoverCard({
                   estadoExame?.tipo === "ar" && estadoExame.fase === "enviando"
                 }
                 disabled={ocupado}
-                onClick={() => inputArRef.current?.click()}
+                onClick={() => abrirCamera(inputArRef.current)}
               />
               <BotaoCapturaExame
                 rotulo={`📷 Adicionar ${ROTULOS_EXAMES_EYENOTE.tonometry}`}
@@ -226,7 +237,7 @@ export default function AcaoMoverCard({
                   estadoExame.fase === "enviando"
                 }
                 disabled={ocupado}
-                onClick={() => inputTonoRef.current?.click()}
+                onClick={() => abrirCamera(inputTonoRef.current)}
               />
             </div>
             <input

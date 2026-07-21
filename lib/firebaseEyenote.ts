@@ -412,6 +412,94 @@ function extensaoDe(arquivo: File): string {
   return pelaPista && pelaPista.length <= 4 ? pelaPista.toLowerCase() : "jpg";
 }
 
+// ─── Aceleradores do envio ───────────────────────────────────────────────────
+
+/** Fotos de câmera de tablet vêm com 3–8 MB; no uplink do Starlink isso é o
+ * grosso do tempo de "enviando…". Reduzimos para no máx. LADO_MAX_PX de lado
+ * e JPEG QUALIDADE_JPEG — sobra resolução de sobra pra ler um impresso de
+ * AR/Tono e o arquivo cai pra ~10% do tamanho. */
+const LADO_MAX_PX = 1800;
+const QUALIDADE_JPEG = 0.82;
+const LIMIAR_COMPRESSAO_BYTES = 700 * 1024;
+
+async function comprimirImagem(arquivo: File): Promise<Blob> {
+  if (arquivo.size <= LIMIAR_COMPRESSAO_BYTES) return arquivo;
+  try {
+    // 'from-image' aplica a rotação EXIF (foto tirada de lado sai certa).
+    const bitmap = await createImageBitmap(arquivo, {
+      imageOrientation: "from-image",
+    });
+    const escala = Math.min(
+      1,
+      LADO_MAX_PX / Math.max(bitmap.width, bitmap.height),
+    );
+    const largura = Math.round(bitmap.width * escala);
+    const altura = Math.round(bitmap.height * escala);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = largura;
+    canvas.height = altura;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return arquivo;
+    ctx.drawImage(bitmap, 0, 0, largura, altura);
+    bitmap.close();
+
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", QUALIDADE_JPEG),
+    );
+    // Se a compressão falhar ou (raro) não reduzir, manda o original.
+    return blob && blob.size < arquivo.size ? blob : arquivo;
+  } catch {
+    return arquivo;
+  }
+}
+
+/** Buscas de ficha em andamento, por chave de sessão — evita duplicar a
+ * query quando o aquecimento e o envio real se sobrepõem. */
+const buscasEmAndamento = new Map<
+  string,
+  Promise<PacienteEyenoteResumo | null>
+>();
+
+function buscarPacienteDeduplicado(
+  medicoCodigo: string,
+  nomePaciente: string,
+): Promise<PacienteEyenoteResumo | null> {
+  const k = chaveCacheSessao(medicoCodigo, nomePaciente);
+  const emAndamento = buscasEmAndamento.get(k);
+  if (emAndamento) return emAndamento;
+
+  const p = acharPacienteRecente(medicoCodigo, nomePaciente).finally(() => {
+    buscasEmAndamento.delete(k);
+  });
+  buscasEmAndamento.set(k, p);
+  return p;
+}
+
+/**
+ * Aquecimento: chamar no TOQUE do botão de exame, antes da câmera abrir.
+ * Enquanto a pessoa enquadra a foto (vários segundos), já autenticamos e
+ * procuramos a ficha do paciente. Quando a foto chega, normalmente só falta
+ * o upload. Não cria ficha (se a pessoa cancelar a foto, nada muda no
+ * Eyenote) e engole erros — o envio real refaz e reporta o que falhar.
+ */
+export function aquecerEnvioExame(
+  medicoCodigo: string,
+  nomePaciente: string,
+): void {
+  const codigo = medicoCodigo.trim();
+  if (codigo === "" || nomePaciente.trim() === "") return;
+  if (lerCacheSessao(codigo, nomePaciente)) return;
+
+  void buscarPacienteDeduplicado(codigo, nomePaciente)
+    .then((existente) => {
+      if (existente) gravarCacheSessao(codigo, nomePaciente, existente.id);
+    })
+    .catch(() => {
+      /* silencioso — envio real trata */
+    });
+}
+
 export interface OpcoesEnvioExame {
   medicoCodigo: string;
   nomePaciente: string;
@@ -444,9 +532,13 @@ export async function enviarExameParaEyenote(
 
     const medicoCodigo = opts.medicoCodigo.trim();
 
-    // 1ª linha de defesa: cache em memória da sessão. Resolve o caso
-    // recepção tira AR e Tono em seguida sem depender de consistência
-    // eventual do Firestore.
+    // Comprime a foto em paralelo com a resolução da ficha — as duas
+    // etapas são independentes.
+    const imagemPromise = comprimirImagem(opts.arquivo);
+
+    // 1ª linha de defesa: cache em memória da sessão (inclusive o que o
+    // aquecimento do toque no botão já resolveu). Resolve o caso recepção
+    // tira AR e Tono em seguida sem depender de consistência eventual.
     const idEmCache = lerCacheSessao(medicoCodigo, opts.nomePaciente);
 
     let patientId: string;
@@ -456,8 +548,9 @@ export async function enviarExameParaEyenote(
       patientId = idEmCache;
       reusado = true;
     } else {
-      // 2ª linha: query no servidor (REST sempre vai à rede).
-      const existente = await acharPacienteRecente(
+      // 2ª linha: query no servidor (REST sempre vai à rede). Se o
+      // aquecimento ainda estiver no ar, reaproveita a mesma busca.
+      const existente = await buscarPacienteDeduplicado(
         medicoCodigo,
         opts.nomePaciente,
       );
@@ -472,11 +565,13 @@ export async function enviarExameParaEyenote(
     }
 
     // Upload da imagem (SDK do Storage — HTTPS simples, funciona bem).
-    const ext = extensaoDe(opts.arquivo);
+    const imagem = await imagemPromise;
+    const comprimida = imagem !== opts.arquivo;
+    const ext = comprimida ? "jpg" : extensaoDe(opts.arquivo);
     const path = `exams/${patientId}/${opts.tipoExame}_${Date.now()}.${ext}`;
     const ref = storageRef(storage, path);
-    await uploadBytes(ref, opts.arquivo, {
-      contentType: opts.arquivo.type || "image/jpeg",
+    await uploadBytes(ref, imagem, {
+      contentType: comprimida ? "image/jpeg" : opts.arquivo.type || "image/jpeg",
     });
     const url = await getDownloadURL(ref);
 
