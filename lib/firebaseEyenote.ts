@@ -51,7 +51,7 @@ import {
   type FirebaseStorage,
 } from "firebase/storage";
 
-import { comTimeout } from "./comTimeout";
+import { comTimeout, TimeoutError } from "./comTimeout";
 
 /** Configuração pública do Firebase do projeto eyenotev2. */
 const firebaseConfigEyenote = {
@@ -150,13 +150,18 @@ function gravarCacheSessao(
   });
 }
 
-const TIMEOUT_LEITURA_EYENOTE_MS = 4000;
+const TIMEOUT_LEITURA_EYENOTE_MS = 6000;
+const TIMEOUT_LEITURA_RETRY_EYENOTE_MS = 12000;
 const PAUSA_RETRY_EYENOTE_MS = 500;
 
 /**
  * Executa a leitura no servidor com timeout e 1 retry. Mantém a garantia
  * de ir à rede (getDocsFromServer) mas tolera uma oscilação transitória
  * do Starlink, que antes fazia o anexo de exame "dar erro" de vez.
+ *
+ * A 1ª tentativa costuma pagar o custo de abrir a conexão com o Firestore
+ * (handshake + auth), então o retry ganha um teto bem mais folgado — na
+ * prática é ele que salva o envio quando o Starlink está oscilando.
  */
 async function buscarDocsComRetry(
   q: ReturnType<typeof query>,
@@ -171,7 +176,7 @@ async function buscarDocsComRetry(
     await new Promise((r) => setTimeout(r, PAUSA_RETRY_EYENOTE_MS));
     return await comTimeout(
       getDocsFromServer(q),
-      TIMEOUT_LEITURA_EYENOTE_MS,
+      TIMEOUT_LEITURA_RETRY_EYENOTE_MS,
       "eyenote:acharPaciente(retry)",
     );
   }
@@ -183,13 +188,17 @@ async function acharPacienteRecente(
 ): Promise<PacienteEyenoteResumo | null> {
   const { db } = obterContexto();
 
-  // Query simples por documentId — evita exigir índice composto.
-  // Filtramos `name` + `status active` + `createdAt nas últimas 6h` no cliente.
+  // Só filtros de igualdade — Firestore resolve com merge de índices
+  // single-field, sem exigir índice composto. O `status == "active"`
+  // descarta no servidor as fichas antigas já atendidas, que vinham
+  // inteiras na resposta e deixavam a leitura pesada demais pro Starlink.
+  // Filtramos `name` + `createdAt nas últimas 6h` no cliente.
   // `getDocsFromServer` força ida à rede e evita servir cache local stale
   // (era o caminho mais provável de gerar duplicata pós-criação).
   const q = query(
     collection(db, "patients"),
     where("documentId", "==", medicoCodigo),
+    where("status", "==", "active"),
     limit(100),
   );
 
@@ -349,9 +358,17 @@ export async function enviarExameParaEyenote(
 
     return { ok: true, patientId, reusado };
   } catch (err) {
-    const mensagem = err instanceof Error ? err.message : "Erro desconhecido";
     // eslint-disable-next-line no-console
     console.error("[eyenote] Falha ao enviar exame:", err);
+    if (err instanceof TimeoutError) {
+      return {
+        ok: false,
+        mensagem:
+          "A internet está lenta e o Eyenote não respondeu a tempo. " +
+          "Aguarde alguns segundos e toque no botão de novo.",
+      };
+    }
+    const mensagem = err instanceof Error ? err.message : "Erro desconhecido";
     return { ok: false, mensagem };
   }
 }
