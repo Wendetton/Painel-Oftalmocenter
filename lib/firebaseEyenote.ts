@@ -1,11 +1,18 @@
 "use client";
 
 /**
- * Cliente Firebase do Eyenote (projeto eyenotev2).
+ * Cliente do Eyenote (projeto eyenotev2).
  *
  * O Eyenote tem seu próprio Firebase, SEPARADO do nosso (painel-oftalmocenter).
- * Para gravar exames lá, inicializamos uma segunda instância nomeada do
- * Firebase Web SDK — não conflita com o nosso firebase-admin server-side.
+ *
+ * IMPORTANTE — por que Firestore via REST e não via SDK:
+ * O SDK web do Firestore conversa por WebChannel (conexão longa/streaming).
+ * Na rede da clínica (Starlink) esse canal morre e getDocsFromServer falhava
+ * com "Failed to get documents from server" mesmo com a internet funcionando —
+ * a autenticação (HTTPS simples) e o upload pro Storage (HTTPS simples)
+ * passavam, só o Firestore caía. Então aqui TODAS as operações de Firestore
+ * usam a API REST (fetch puro, requisição curta), que se comporta como
+ * qualquer outra chamada de rede do painel. Auth e Storage continuam no SDK.
  *
  * Fluxo do enviarExame(opts):
  *   1. Autenticação anônima (igual ao /legacy original).
@@ -13,7 +20,7 @@
  *      o MESMO nome — se achar, reutiliza (caso AR e Tono cheguem em
  *      momentos separados, ficam no mesmo doc).
  *   3. Senão, cria doc novo na coleção `patients` com:
- *        name, documentId, status: "active", createdAt, exams.
+ *        name, documentId, status: "active", createdAt (server), exams.
  *   4. Faz upload da imagem para `exams/{patientId}/{tipoExame}_{ts}.{ext}`.
  *   5. Atualiza `exams.{tipoExame}` do doc paciente marcando uploaded:true
  *      com URL e timestamp.
@@ -30,28 +37,12 @@ import {
   type Auth,
 } from "firebase/auth";
 import {
-  collection,
-  doc,
-  getDocsFromServer,
-  getFirestore,
-  limit,
-  query,
-  serverTimestamp,
-  setDoc,
-  Timestamp,
-  updateDoc,
-  where,
-  type Firestore,
-} from "firebase/firestore";
-import {
   getDownloadURL,
   getStorage,
   ref as storageRef,
   uploadBytes,
   type FirebaseStorage,
 } from "firebase/storage";
-
-import { comTimeout, TimeoutError } from "./comTimeout";
 
 /** Configuração pública do Firebase do projeto eyenotev2. */
 const firebaseConfigEyenote = {
@@ -65,6 +56,8 @@ const firebaseConfigEyenote = {
 
 const NOME_APP = "eyenote";
 
+const BASE_FIRESTORE = `https://firestore.googleapis.com/v1/projects/${firebaseConfigEyenote.projectId}/databases/(default)/documents`;
+
 export type TipoExameEyenote = "ar" | "tonometry";
 
 export const ROTULOS_EXAMES_EYENOTE: Record<TipoExameEyenote, string> = {
@@ -74,7 +67,6 @@ export const ROTULOS_EXAMES_EYENOTE: Record<TipoExameEyenote, string> = {
 
 interface ContextoEyenote {
   app: FirebaseApp;
-  db: Firestore;
   storage: FirebaseStorage;
   auth: Auth;
 }
@@ -85,16 +77,91 @@ function obterContexto(): ContextoEyenote {
     existente ?? initializeApp(firebaseConfigEyenote, NOME_APP);
   return {
     app,
-    db: getFirestore(app),
     storage: getStorage(app),
     auth: getAuth(app),
   };
 }
 
-async function garantirAutenticado(): Promise<void> {
+async function tokenAutenticado(): Promise<string> {
   const { auth } = obterContexto();
-  if (auth.currentUser) return;
-  await signInAnonymously(auth);
+  if (!auth.currentUser) {
+    await signInAnonymously(auth);
+  }
+  const user = auth.currentUser;
+  if (!user) {
+    throw new Error("Autenticação anônima no Eyenote falhou.");
+  }
+  return user.getIdToken();
+}
+
+// ─── Firestore por REST ──────────────────────────────────────────────────────
+
+/** Erro de rede/servidor nas chamadas REST — vira mensagem amigável na tela. */
+class ErroRedeEyenote extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ErroRedeEyenote";
+  }
+}
+
+const TIMEOUT_REST_MS = 10_000;
+const PAUSA_RETRY_REST_MS = 700;
+
+/**
+ * fetch com timeout + 1 retry para falha de rede, timeout ou 5xx.
+ * Requisições curtas e independentes — nada de canal persistente.
+ */
+async function fetchFirestore(
+  url: string,
+  body: unknown,
+  rotulo: string,
+): Promise<unknown> {
+  const token = await tokenAutenticado();
+  let ultimaCausa = "";
+
+  for (let tentativa = 0; tentativa < 2; tentativa += 1) {
+    if (tentativa > 0) {
+      await new Promise((r) => setTimeout(r, PAUSA_RETRY_REST_MS));
+    }
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_REST_MS);
+    try {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
+
+      if (resp.ok) {
+        return (await resp.json()) as unknown;
+      }
+      const texto = await resp.text().catch(() => "");
+      // 4xx é definitivo (regra, permissão, request inválido) — sem retry.
+      if (resp.status < 500) {
+        throw new Error(
+          `Eyenote/${rotulo}: HTTP ${resp.status} — ${texto.slice(0, 300)}`,
+        );
+      }
+      ultimaCausa = `HTTP ${resp.status}`;
+    } catch (err) {
+      clearTimeout(timer);
+      if (err instanceof Error && err.name === "AbortError") {
+        ultimaCausa = `timeout de ${TIMEOUT_REST_MS}ms`;
+      } else if (err instanceof Error && err.name !== "TypeError") {
+        // Erros que nós mesmos lançamos acima (4xx) propagam direto.
+        throw err;
+      } else {
+        ultimaCausa = err instanceof Error ? err.message : String(err);
+      }
+    }
+  }
+
+  throw new ErroRedeEyenote(`Eyenote/${rotulo} falhou: ${ultimaCausa}`);
 }
 
 interface PacienteEyenoteResumo {
@@ -150,121 +217,190 @@ function gravarCacheSessao(
   });
 }
 
-const TIMEOUT_LEITURA_EYENOTE_MS = 6000;
-const TIMEOUT_LEITURA_RETRY_EYENOTE_MS = 12000;
-const PAUSA_RETRY_EYENOTE_MS = 500;
+// Formatos da API REST do Firestore (só os campos que usamos).
+interface ValorFirestore {
+  stringValue?: string;
+  timestampValue?: string;
+  booleanValue?: boolean;
+  mapValue?: { fields?: Record<string, ValorFirestore> };
+}
 
-/**
- * Executa a leitura no servidor com timeout e 1 retry. Mantém a garantia
- * de ir à rede (getDocsFromServer) mas tolera uma oscilação transitória
- * do Starlink, que antes fazia o anexo de exame "dar erro" de vez.
- *
- * A 1ª tentativa costuma pagar o custo de abrir a conexão com o Firestore
- * (handshake + auth), então o retry ganha um teto bem mais folgado — na
- * prática é ele que salva o envio quando o Starlink está oscilando.
- */
-async function buscarDocsComRetry(
-  q: ReturnType<typeof query>,
-): Promise<Awaited<ReturnType<typeof getDocsFromServer>>> {
-  try {
-    return await comTimeout(
-      getDocsFromServer(q),
-      TIMEOUT_LEITURA_EYENOTE_MS,
-      "eyenote:acharPaciente",
-    );
-  } catch {
-    await new Promise((r) => setTimeout(r, PAUSA_RETRY_EYENOTE_MS));
-    return await comTimeout(
-      getDocsFromServer(q),
-      TIMEOUT_LEITURA_RETRY_EYENOTE_MS,
-      "eyenote:acharPaciente(retry)",
-    );
-  }
+interface DocFirestore {
+  name?: string;
+  fields?: Record<string, ValorFirestore>;
 }
 
 async function acharPacienteRecente(
   medicoCodigo: string,
   nomePaciente: string,
 ): Promise<PacienteEyenoteResumo | null> {
-  const { db } = obterContexto();
-
-  // Só filtros de igualdade — Firestore resolve com merge de índices
-  // single-field, sem exigir índice composto. O `status == "active"`
-  // descarta no servidor as fichas antigas já atendidas, que vinham
-  // inteiras na resposta e deixavam a leitura pesada demais pro Starlink.
+  // Só filtros de igualdade — o Firestore resolve com merge de índices
+  // single-field, sem exigir índice composto. `status == "active"`
+  // descarta no servidor as fichas antigas já atendidas.
   // Filtramos `name` + `createdAt nas últimas 6h` no cliente.
-  // `getDocsFromServer` força ida à rede e evita servir cache local stale
-  // (era o caminho mais provável de gerar duplicata pós-criação).
-  const q = query(
-    collection(db, "patients"),
-    where("documentId", "==", medicoCodigo),
-    where("status", "==", "active"),
-    limit(100),
-  );
+  // A leitura é sempre no servidor (REST não tem cache local) — sem risco
+  // de reabrir o bug de ficha duplicada por cache stale.
+  const filtro = (campo: string, valor: string) => ({
+    fieldFilter: {
+      field: { fieldPath: campo },
+      op: "EQUAL",
+      value: { stringValue: valor },
+    },
+  });
 
-  // A leitura no servidor é obrigatória (não podemos cair para cache local
-  // sob risco de reabrir o bug de ficha duplicada). Mas a rede da TV é
-  // Starlink e oscila: por isso, timeout de 4s + 1 retry com 500ms de
-  // pausa. Se as duas tentativas falharem, o erro propaga e vira
-  // { ok:false, mensagem } exibido ao usuário — sem duplicar ficha.
-  const snap = await buscarDocsComRetry(q);
+  const resposta = (await fetchFirestore(
+    `${BASE_FIRESTORE}:runQuery`,
+    {
+      structuredQuery: {
+        from: [{ collectionId: "patients" }],
+        where: {
+          compositeFilter: {
+            op: "AND",
+            filters: [
+              filtro("documentId", medicoCodigo),
+              filtro("status", "active"),
+            ],
+          },
+        },
+        limit: 100,
+      },
+    },
+    "acharPaciente",
+  )) as Array<{ document?: DocFirestore }>;
 
   const limiteMs = Date.now() - JANELA_REUSO_PACIENTE_MS;
   let melhor: PacienteEyenoteResumo | null = null;
 
-  for (const d of snap.docs) {
-    const data = d.data() as Record<string, unknown>;
-    if (data.status !== "active") continue;
-    if (typeof data.name !== "string") continue;
-    if (data.name.trim().toLowerCase() !== nomePaciente.trim().toLowerCase()) {
+  for (const linha of Array.isArray(resposta) ? resposta : []) {
+    const doc = linha.document;
+    const fields = doc?.fields;
+    if (!doc?.name || !fields) continue;
+
+    const nome = fields.name?.stringValue;
+    if (typeof nome !== "string") continue;
+    if (nome.trim().toLowerCase() !== nomePaciente.trim().toLowerCase()) {
       continue;
     }
-    const createdAt = data.createdAt;
-    const ms =
-      createdAt instanceof Timestamp
-        ? createdAt.toMillis()
-        : typeof createdAt === "object" &&
-            createdAt !== null &&
-            "seconds" in createdAt
-          ? (createdAt as { seconds: number }).seconds * 1000
-          : null;
 
-    // serverTimestamp() pendente pode chegar como null no read-back
-    // imediatamente após o setDoc — antes a gente descartava, agora
-    // tratamos como "acabou de ser criado" e seguimos comparando.
-    const msEfetivo = ms ?? Date.now();
+    // createdAt recém-gravado com serverTimestamp está sempre presente via
+    // REST; se faltar (doc antigo/malformado), tratamos como "agora".
+    const criadoEm = fields.createdAt?.timestampValue;
+    const ms = criadoEm ? Date.parse(criadoEm) : NaN;
+    const msEfetivo = Number.isFinite(ms) ? ms : Date.now();
     if (msEfetivo < limiteMs) continue;
 
     if (!melhor || msEfetivo > (melhor.createdAtMs ?? 0)) {
       melhor = {
-        id: d.id,
-        name: data.name,
-        documentId: String(data.documentId ?? ""),
+        id: doc.name.split("/").pop() ?? "",
+        name: nome,
+        documentId: fields.documentId?.stringValue ?? "",
         createdAtMs: msEfetivo,
       };
     }
   }
 
-  return melhor;
+  return melhor && melhor.id !== "" ? melhor : null;
+}
+
+/** Gera um ID de documento no mesmo formato do SDK (20 chars alfanuméricos). */
+function gerarIdDocumento(): string {
+  const chars =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = new Uint8Array(20);
+  crypto.getRandomValues(bytes);
+  let id = "";
+  for (const b of bytes) id += chars[b % chars.length];
+  return id;
 }
 
 async function criarPacienteNovo(
   medicoCodigo: string,
   nomePaciente: string,
 ): Promise<string> {
-  const { db } = obterContexto();
-  const ref = doc(collection(db, "patients"));
-  await setDoc(ref, {
-    name: nomePaciente,
-    documentId: medicoCodigo,
-    status: "active",
-    createdAt: serverTimestamp(),
-    exams: {
-      ar: { uploaded: false },
-      tonometry: { uploaded: false },
+  const id = gerarIdDocumento();
+  await fetchFirestore(
+    `${BASE_FIRESTORE}:commit`,
+    {
+      writes: [
+        {
+          update: {
+            name: `${BASE_FIRESTORE.replace("https://firestore.googleapis.com/v1/", "")}/patients/${id}`,
+            fields: {
+              name: { stringValue: nomePaciente },
+              documentId: { stringValue: medicoCodigo },
+              status: { stringValue: "active" },
+              exams: {
+                mapValue: {
+                  fields: {
+                    ar: {
+                      mapValue: {
+                        fields: { uploaded: { booleanValue: false } },
+                      },
+                    },
+                    tonometry: {
+                      mapValue: {
+                        fields: { uploaded: { booleanValue: false } },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          // serverTimestamp igual ao SDK: quem carimba é o servidor.
+          updateTransforms: [
+            { fieldPath: "createdAt", setToServerValue: "REQUEST_TIME" },
+          ],
+        },
+      ],
     },
-  });
-  return ref.id;
+    "criarPaciente",
+  );
+  return id;
+}
+
+async function marcarExameEnviado(
+  patientId: string,
+  tipoExame: TipoExameEyenote,
+  url: string,
+): Promise<void> {
+  await fetchFirestore(
+    `${BASE_FIRESTORE}:commit`,
+    {
+      writes: [
+        {
+          update: {
+            name: `${BASE_FIRESTORE.replace("https://firestore.googleapis.com/v1/", "")}/patients/${patientId}`,
+            fields: {
+              exams: {
+                mapValue: {
+                  fields: {
+                    [tipoExame]: {
+                      mapValue: {
+                        fields: {
+                          uploaded: { booleanValue: true },
+                          url: { stringValue: url },
+                          uploadedAt: {
+                            stringValue: new Date().toISOString(),
+                          },
+                          uploadedBy: {
+                            stringValue: "painel-oftalmocenter",
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          // Atualiza SÓ exams.{tipo} — não toca no outro exame nem no resto.
+          updateMask: { fieldPaths: [`exams.${tipoExame}`] },
+        },
+      ],
+    },
+    "marcarExame",
+  );
 }
 
 function extensaoDe(arquivo: File): string {
@@ -304,8 +440,7 @@ export async function enviarExameParaEyenote(
   }
 
   try {
-    await garantirAutenticado();
-    const { db, storage } = obterContexto();
+    const { storage } = obterContexto();
 
     const medicoCodigo = opts.medicoCodigo.trim();
 
@@ -321,7 +456,7 @@ export async function enviarExameParaEyenote(
       patientId = idEmCache;
       reusado = true;
     } else {
-      // 2ª linha: query no servidor (já força rede, ignora cache local).
+      // 2ª linha: query no servidor (REST sempre vai à rede).
       const existente = await acharPacienteRecente(
         medicoCodigo,
         opts.nomePaciente,
@@ -336,7 +471,7 @@ export async function enviarExameParaEyenote(
       gravarCacheSessao(medicoCodigo, opts.nomePaciente, patientId);
     }
 
-    // Upload da imagem.
+    // Upload da imagem (SDK do Storage — HTTPS simples, funciona bem).
     const ext = extensaoDe(opts.arquivo);
     const path = `exams/${patientId}/${opts.tipoExame}_${Date.now()}.${ext}`;
     const ref = storageRef(storage, path);
@@ -346,21 +481,13 @@ export async function enviarExameParaEyenote(
     const url = await getDownloadURL(ref);
 
     // Atualiza o doc do paciente marcando o exame.
-    const patientRef = doc(db, "patients", patientId);
-    await updateDoc(patientRef, {
-      [`exams.${opts.tipoExame}`]: {
-        uploaded: true,
-        url,
-        uploadedAt: new Date().toISOString(),
-        uploadedBy: "painel-oftalmocenter",
-      },
-    });
+    await marcarExameEnviado(patientId, opts.tipoExame, url);
 
     return { ok: true, patientId, reusado };
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error("[eyenote] Falha ao enviar exame:", err);
-    if (err instanceof TimeoutError) {
+    if (err instanceof ErroRedeEyenote) {
       return {
         ok: false,
         mensagem:
