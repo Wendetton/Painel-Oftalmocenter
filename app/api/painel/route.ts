@@ -10,7 +10,7 @@ import {
 import { gravarEventoTransicao } from "@/lib/eventoEstagio";
 import {
   buscarAgendamentosDoDia,
-  buscarIdadePaciente,
+  buscarIdadesComOrcamento,
 } from "@/lib/prodoctor-client";
 import {
   forcarEntrada,
@@ -81,13 +81,11 @@ export async function GET(req: Request): Promise<NextResponse<RespostaPainel>> {
       ),
     );
 
-    const idades = new Map<number, number | null>();
-    await Promise.all(
-      codigosPaciente.map(async (codigo) => {
-        const idade = await buscarIdadePaciente(codigo);
-        idades.set(codigo, idade);
-      }),
-    );
+    // No máximo 8 consultas novas de idade por ciclo: pós-deploy o cache
+    // está vazio pro dia inteiro, e buscar tudo de uma vez estourava o
+    // rate limit da ProDoctor. Quem ficar de fora aparece sem idade por
+    // alguns segundos e entra nos próximos ciclos de polling.
+    const idades = await buscarIdadesComOrcamento(codigosPaciente, 8);
 
     // Hidrata o rastreador com o estado salvo no Firestore na PRIMEIRA
     // chamada após cold start. Isso garante que o cronômetro de cada

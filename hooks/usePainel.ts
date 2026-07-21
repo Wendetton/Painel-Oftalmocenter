@@ -57,13 +57,17 @@ export function usePainel(codigosMedicos: number[]): EstadoPainel {
         });
         const dados = (await resp.json()) as RespostaPainelApi;
         if (cancelado) return;
-        setEstado({
-          cards: dados.cards,
-          atualizadoEm: dados.atualizadoEm,
+        setEstado((s) => ({
+          // Se a API falhou (fonteOnline false), ela devolve cards: [] —
+          // mas apagar a lista da TV no meio do expediente é pior que
+          // mostrar dados de alguns segundos atrás. Mantém a última lista
+          // boa e deixa o erro visível no rodapé.
+          cards: dados.fonteOnline ? dados.cards : s.cards,
+          atualizadoEm: dados.fonteOnline ? dados.atualizadoEm : s.atualizadoEm,
           fonteOnline: dados.fonteOnline,
           ultimoErro: dados.ultimoErro,
           carregandoInicial: false,
-        });
+        }));
       } catch (err) {
         if (cancelado) return;
         // Mantém a última lista boa: se a API caiu, o usuário ainda vê
