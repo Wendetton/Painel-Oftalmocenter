@@ -66,6 +66,39 @@ export const CORES_MEDICOS: Record<number, CorMedico> = {
 
 const COR_MEDICO_FALLBACK: CorMedico = { bg: "#475569", texto: "#FFFFFF" };
 
+/**
+ * Código de cada médico no Eyenote (o mesmo que ele digita ao entrar em
+ * eyenotev3.vercel.app/legacy). Indexado pelo `codigo` do médico no
+ * ProDoctor. Os exames (AR / Tono) tirados pelo card de um paciente vão
+ * para o Eyenote do médico daquele paciente.
+ *
+ * Médico sem entrada aqui (ou com código vazio): o card pergunta para
+ * qual médico enviar, entre os que têm código cadastrado.
+ */
+export const CODIGOS_EYENOTE_MEDICOS: Record<number, string> = {
+  2: "ztnz7qyvshe", // Dr Paulo
+  3: "", // Dra Lilian — sem Eyenote ainda
+  4: "xqw91md52y", // Dr Fernando
+};
+
+/** Código Eyenote do médico, ou null se não houver um cadastrado. */
+export function codigoEyenoteDoMedico(codigo: number | null): string | null {
+  if (codigo === null) return null;
+  const valor = CODIGOS_EYENOTE_MEDICOS[codigo]?.trim();
+  return valor ? valor : null;
+}
+
+/** Médicos com código Eyenote cadastrado, para o seletor de destino. */
+export function medicosComEyenote(): { codigo: number; nome: string; eyenote: string }[] {
+  return Object.entries(CODIGOS_EYENOTE_MEDICOS)
+    .map(([codigo, eyenote]) => ({
+      codigo: Number(codigo),
+      nome: APELIDOS_MEDICOS[Number(codigo)] ?? `Médico ${codigo}`,
+      eyenote: eyenote.trim(),
+    }))
+    .filter((m) => m.eyenote !== "");
+}
+
 export function corMedico(codigo: number | null): CorMedico {
   if (codigo === null) return COR_MEDICO_FALLBACK;
   return CORES_MEDICOS[codigo] ?? COR_MEDICO_FALLBACK;

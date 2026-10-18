@@ -8,9 +8,11 @@
  * - Lista de TODOS os destinos possíveis (exceto o atual), cada um com a
  *   bolinha colorida do estágio.
  * - Botão separado, vermelho, para "marcar como faltou" (destrutivo).
- * - Quando há código do médico no Eyenote configurado, dois botões pra
- *   tirar foto de exame (AR / Tono) — abrem a câmera do tablet e fazem
- *   upload direto pro projeto eyenotev2.
+ * - Dois botões pra tirar foto de exame (AR / Tono) — abrem a câmera do
+ *   tablet e fazem upload direto pro projeto eyenotev2, no Eyenote do
+ *   médico do paciente (lib/configuracao.ts → CODIGOS_EYENOTE_MEDICOS).
+ *   Se o médico do paciente não tem código cadastrado, pergunta para
+ *   qual médico enviar.
  * - Cancelar / ESC fecha.
  *
  * O parent envia o evento "mover" + escolha do destino. Esta componente
@@ -19,6 +21,11 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import {
+  codigoEyenoteDoMedico,
+  medicosComEyenote,
+  nomeMedicoCurto,
+} from "@/lib/configuracao";
 import { CORES_POR_ESTAGIO } from "@/lib/cores";
 import {
   aquecerEnvioExame,
@@ -36,8 +43,6 @@ interface Props {
   card: CardPaciente;
   onFechar: () => void;
   onMover: (destino: EstagioDestino) => Promise<{ ok: boolean; mensagem?: string }>;
-  /** Código do médico configurado no Eyenote. Se null, seção de exames some. */
-  codigoMedicoEyenote?: string | null;
 }
 
 interface EstadoExame {
@@ -50,13 +55,21 @@ export default function AcaoMoverCard({
   card,
   onFechar,
   onMover,
-  codigoMedicoEyenote = null,
 }: Props) {
   const [enviando, setEnviando] = useState<EstagioDestino | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [estadoExame, setEstadoExame] = useState<EstadoExame | null>(null);
   const inputArRef = useRef<HTMLInputElement | null>(null);
   const inputTonoRef = useRef<HTMLInputElement | null>(null);
+
+  // Eyenote de destino: o do médico do paciente; se ele não tiver código
+  // cadastrado, quem está no tablet escolhe entre os médicos que têm.
+  const codigoEyenoteFixo = codigoEyenoteDoMedico(card.medico.codigo);
+  const opcoesEyenote = medicosComEyenote();
+  const [codigoEyenoteEscolhido, setCodigoEyenoteEscolhido] = useState<
+    string | null
+  >(null);
+  const codigoMedicoEyenote = codigoEyenoteFixo ?? codigoEyenoteEscolhido;
 
   const ocupado = enviando !== null || estadoExame?.fase === "enviando";
 
@@ -93,7 +106,7 @@ export default function AcaoMoverCard({
       setEstadoExame({
         tipo,
         fase: "erro",
-        mensagem: "Configure o código do médico no Eyenote antes.",
+        mensagem: "Escolha para qual médico enviar o exame.",
       });
       return;
     }
@@ -130,7 +143,7 @@ export default function AcaoMoverCard({
   // Separa destinos "operacionais" (mover entre setores) do "Faltou" (destrutivo).
   const movePrimario = destinos.filter((d) => d !== "FALTOU");
   const podeMarcarFaltou = destinos.includes("FALTOU");
-  const mostrarSecaoExame = codigoMedicoEyenote !== null && podeEditar;
+  const mostrarSecaoExame = opcoesEyenote.length > 0 && podeEditar;
 
   return (
     <div
@@ -221,13 +234,52 @@ export default function AcaoMoverCard({
             <p className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
               Adicionar exame no Eyenote
             </p>
+            {codigoEyenoteFixo !== null ? (
+              <p className="px-2 pb-2 text-xs text-slate-600">
+                Vai para o Eyenote de{" "}
+                <strong className="font-semibold text-slate-800">
+                  {nomeMedicoCurto(card.medico.codigo, card.medico.nome)}
+                </strong>
+                .
+              </p>
+            ) : (
+              <div className="px-2 pb-3">
+                <p className="pb-2 text-xs text-slate-600">
+                  {card.medico.nome
+                    ? `${card.medico.nome} não tem Eyenote cadastrado. `
+                    : ""}
+                  Enviar para qual médico?
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {opcoesEyenote.map((m) => {
+                    const ativo = codigoEyenoteEscolhido === m.eyenote;
+                    return (
+                      <button
+                        key={m.codigo}
+                        type="button"
+                        onClick={() => setCodigoEyenoteEscolhido(m.eyenote)}
+                        disabled={ocupado}
+                        aria-pressed={ativo}
+                        className={`rounded-full border px-3 py-1.5 text-sm font-medium transition disabled:opacity-50 ${
+                          ativo
+                            ? "border-blue-600 bg-blue-600 text-white"
+                            : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                        }`}
+                      >
+                        {m.nome}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-2">
               <BotaoCapturaExame
                 rotulo={`📷 Adicionar ${ROTULOS_EXAMES_EYENOTE.ar}`}
                 ativo={
                   estadoExame?.tipo === "ar" && estadoExame.fase === "enviando"
                 }
-                disabled={ocupado}
+                disabled={ocupado || codigoMedicoEyenote === null}
                 onClick={() => abrirCamera(inputArRef.current)}
               />
               <BotaoCapturaExame
@@ -236,7 +288,7 @@ export default function AcaoMoverCard({
                   estadoExame?.tipo === "tonometry" &&
                   estadoExame.fase === "enviando"
                 }
-                disabled={ocupado}
+                disabled={ocupado || codigoMedicoEyenote === null}
                 onClick={() => abrirCamera(inputTonoRef.current)}
               />
             </div>
