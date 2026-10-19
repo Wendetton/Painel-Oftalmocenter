@@ -44,6 +44,8 @@ import {
   type FirebaseStorage,
 } from "firebase/storage";
 
+import { dataYYYYMMDDBrasil } from "./configuracao";
+
 /** Configuração pública do Firebase do projeto eyenotev2. */
 const firebaseConfigEyenote = {
   apiKey: "AIzaSyDB_pQbN52rfNR2QMEztkplc86GaBPy6Zw",
@@ -588,6 +590,251 @@ export async function enviarExameParaEyenote(
         mensagem:
           "A internet está lenta e o Eyenote não respondeu a tempo. " +
           "Aguarde alguns segundos e toque no botão de novo.",
+      };
+    }
+    const mensagem = err instanceof Error ? err.message : "Erro desconhecido";
+    return { ok: false, mensagem };
+  }
+}
+
+// ─── Exames já enviados / troca de médico ────────────────────────────────────
+
+/** Caminho do doc no formato que o REST espera em `name` (sem o host). */
+function caminhoDocPaciente(patientId: string): string {
+  return `${BASE_FIRESTORE.replace("https://firestore.googleapis.com/v1/", "")}/patients/${patientId}`;
+}
+
+function exameEnviado(
+  exams: ValorFirestore | undefined,
+  tipo: TipoExameEyenote,
+): boolean {
+  return (
+    exams?.mapValue?.fields?.[tipo]?.mapValue?.fields?.uploaded
+      ?.booleanValue === true
+  );
+}
+
+export interface PacienteEnviadoEyenote {
+  id: string;
+  nome: string;
+  /** Código Eyenote do médico ao qual a ficha está vinculada hoje. */
+  medicoCodigo: string;
+  criadoEmMs: number | null;
+  exames: Record<TipoExameEyenote, boolean>;
+}
+
+/**
+ * Fichas ATIVAS criadas hoje (fuso de São Paulo) no Eyenote de cada um dos
+ * códigos informados. Fichas que o médico já arquivou não aparecem — o
+ * paciente já foi atendido e não faz sentido trocá-lo de médico.
+ */
+export async function listarPacientesEnviadosHoje(
+  codigosMedicos: string[],
+): Promise<PacienteEnviadoEyenote[]> {
+  const hoje = dataYYYYMMDDBrasil();
+  const filtro = (campo: string, valor: string) => ({
+    fieldFilter: {
+      field: { fieldPath: campo },
+      op: "EQUAL",
+      value: { stringValue: valor },
+    },
+  });
+
+  const respostas = await Promise.all(
+    codigosMedicos.map(
+      (codigo) =>
+        fetchFirestore(
+          `${BASE_FIRESTORE}:runQuery`,
+          {
+            structuredQuery: {
+              from: [{ collectionId: "patients" }],
+              where: {
+                compositeFilter: {
+                  op: "AND",
+                  filters: [
+                    filtro("documentId", codigo),
+                    filtro("status", "active"),
+                  ],
+                },
+              },
+              limit: 200,
+            },
+          },
+          "listarEnviados",
+        ) as Promise<Array<{ document?: DocFirestore }>>,
+    ),
+  );
+
+  const lista: PacienteEnviadoEyenote[] = [];
+  for (const resposta of respostas) {
+    for (const linha of Array.isArray(resposta) ? resposta : []) {
+      const doc = linha.document;
+      const fields = doc?.fields;
+      if (!doc?.name || !fields) continue;
+      const nome = fields.name?.stringValue;
+      if (typeof nome !== "string") continue;
+
+      const criadoEm = fields.createdAt?.timestampValue;
+      const ms = criadoEm ? Date.parse(criadoEm) : NaN;
+      if (!Number.isFinite(ms)) continue;
+      if (dataYYYYMMDDBrasil(new Date(ms)) !== hoje) continue;
+
+      lista.push({
+        id: doc.name.split("/").pop() ?? "",
+        nome,
+        medicoCodigo: fields.documentId?.stringValue ?? "",
+        criadoEmMs: ms,
+        exames: {
+          ar: exameEnviado(fields.exams, "ar"),
+          tonometry: exameEnviado(fields.exams, "tonometry"),
+        },
+      });
+    }
+  }
+
+  // Mais recentes primeiro.
+  return lista
+    .filter((p) => p.id !== "")
+    .sort((a, b) => (b.criadoEmMs ?? 0) - (a.criadoEmMs ?? 0));
+}
+
+async function lerDocPaciente(patientId: string): Promise<DocFirestore | null> {
+  const resposta = (await fetchFirestore(
+    `${BASE_FIRESTORE}:batchGet`,
+    { documents: [caminhoDocPaciente(patientId)] },
+    "lerPaciente",
+  )) as Array<{ found?: DocFirestore }>;
+  const primeiro = Array.isArray(resposta) ? resposta[0] : undefined;
+  return primeiro?.found ?? null;
+}
+
+export interface OpcoesTrocaMedico {
+  patientId: string;
+  nomePaciente: string;
+  /** Código Eyenote atual da ficha. */
+  de: string;
+  /** Código Eyenote do novo médico. */
+  para: string;
+}
+
+export type ResultadoTrocaMedico =
+  | { ok: true; mesclado: boolean }
+  | { ok: false; mensagem: string };
+
+/**
+ * Passa a ficha (com os exames já anexados) para o Eyenote de outro médico.
+ *
+ * Caso normal: só troca o `documentId` da ficha. As fotos ficam onde estão
+ * no Storage (o caminho usa o id da ficha, que não muda) e o Eyenote do
+ * novo médico passa a mostrar a ficha na hora.
+ *
+ * Se o novo médico JÁ tem uma ficha ativa do mesmo paciente (ex.: alguém
+ * tirou o Tono depois da troca), não criamos duplicata: copiamos para ela
+ * os exames que ela ainda não tem e ARQUIVAMOS a ficha antiga (o mesmo que
+ * o botão "Arquivar" do Eyenote faz — fica na lista de arquivados, nada é
+ * apagado). Tudo num único commit: ou aplica tudo, ou nada.
+ */
+export async function trocarMedicoNoEyenote(
+  opts: OpcoesTrocaMedico,
+): Promise<ResultadoTrocaMedico> {
+  const de = opts.de.trim();
+  const para = opts.para.trim();
+  if (para === "" || para === de) {
+    return { ok: false, mensagem: "Escolha um médico diferente do atual." };
+  }
+
+  try {
+    const destino = await acharPacienteRecente(para, opts.nomePaciente);
+    let mesclado = false;
+
+    if (destino && destino.id !== opts.patientId) {
+      const [origemDoc, destinoDoc] = await Promise.all([
+        lerDocPaciente(opts.patientId),
+        lerDocPaciente(destino.id),
+      ]);
+      if (!origemDoc?.fields || !destinoDoc?.fields) {
+        return {
+          ok: false,
+          mensagem: "Não encontrei a ficha no Eyenote. Atualize a lista.",
+        };
+      }
+
+      const writes: unknown[] = [];
+      for (const tipo of ["ar", "tonometry"] as const) {
+        const valorOrigem = origemDoc.fields.exams?.mapValue?.fields?.[tipo];
+        if (
+          exameEnviado(origemDoc.fields.exams, tipo) &&
+          !exameEnviado(destinoDoc.fields.exams, tipo) &&
+          valorOrigem
+        ) {
+          writes.push({
+            update: {
+              name: caminhoDocPaciente(destino.id),
+              fields: {
+                exams: { mapValue: { fields: { [tipo]: valorOrigem } } },
+              },
+            },
+            updateMask: { fieldPaths: [`exams.${tipo}`] },
+            currentDocument: { exists: true },
+          });
+        }
+      }
+      writes.push({
+        update: {
+          name: caminhoDocPaciente(opts.patientId),
+          fields: { status: { stringValue: "archived" } },
+        },
+        updateMask: { fieldPaths: ["status"] },
+        updateTransforms: [
+          { fieldPath: "updatedAt", setToServerValue: "REQUEST_TIME" },
+        ],
+        currentDocument: { exists: true },
+      });
+
+      await fetchFirestore(
+        `${BASE_FIRESTORE}:commit`,
+        { writes },
+        "mesclarFicha",
+      );
+      mesclado = true;
+      gravarCacheSessao(para, opts.nomePaciente, destino.id);
+    } else {
+      await fetchFirestore(
+        `${BASE_FIRESTORE}:commit`,
+        {
+          writes: [
+            {
+              update: {
+                name: caminhoDocPaciente(opts.patientId),
+                fields: { documentId: { stringValue: para } },
+              },
+              updateMask: { fieldPaths: ["documentId"] },
+              updateTransforms: [
+                { fieldPath: "updatedAt", setToServerValue: "REQUEST_TIME" },
+              ],
+              currentDocument: { exists: true },
+            },
+          ],
+        },
+        "trocarMedico",
+      );
+      gravarCacheSessao(para, opts.nomePaciente, opts.patientId);
+    }
+
+    // A ficha não pertence mais ao médico antigo: próximos exames tirados
+    // pelo card com o médico antigo devem procurar/criar ficha de novo.
+    cachePacienteSessao.delete(chaveCacheSessao(de, opts.nomePaciente));
+
+    return { ok: true, mesclado };
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[eyenote] Falha ao trocar médico:", err);
+    if (err instanceof ErroRedeEyenote) {
+      return {
+        ok: false,
+        mensagem:
+          "A internet está lenta e o Eyenote não respondeu a tempo. " +
+          "Aguarde alguns segundos e tente de novo.",
       };
     }
     const mensagem = err instanceof Error ? err.message : "Erro desconhecido";
