@@ -18,6 +18,7 @@
 import type { ReactNode } from "react";
 
 import BotaoBeep from "./BotaoBeep";
+import BotaoExamesEnviados from "./BotaoExamesEnviados";
 import BotaoMetricas from "./BotaoMetricas";
 import BotaoModoEdicao from "./BotaoModoEdicao";
 import { type MetricaCentral } from "./MetricasDoDia";
@@ -90,6 +91,7 @@ export default function PainelLayout({
               metricaCentral={metricaCentral}
             />
             <BotaoBeep ligado={beepLigado} onAlternar={onAlternarBeep} />
+            <BotaoExamesEnviados edicaoLigada={edicaoLigada} />
             <BotaoModoEdicao
               ligado={edicaoLigada}
               configuradoNoServidor={edicaoConfiguradaNoServidor}
