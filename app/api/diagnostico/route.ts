@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 
+import { MEDICOS_PAINEL } from "@/lib/configuracao";
 import { obterFirestore, statusFirebase } from "@/lib/firebase";
+import { buscarAgendamentosDoDia } from "@/lib/prodoctor-client";
 
 /**
  * Endpoint de diagnóstico — só serve para depurar problemas de configuração
@@ -112,10 +114,14 @@ export async function GET(): Promise<NextResponse> {
   // Status do Firebase + sondagem real (try a write+delete on a temp doc).
   const firebase = await diagnosticoFirebase();
 
+  // Amostra (sem dados pessoais) do que a agenda da ProDoctor devolve.
+  const agendaAmostra = await diagnosticoAgenda();
+
   return NextResponse.json({
     config,
     sondagens,
     firebase,
+    agendaAmostra,
     dicas: [
       "Se 'configurada' for false em qualquer variável crítica, adicione no Vercel → Settings → Environment Variables e refaça o deploy.",
       "Nas sondagens, qualquer URL que devolva 'ok: true' (mesmo com status 404) significa que o host existe e responde. Use essa como PRODOCTOR_API_URL.",
@@ -124,6 +130,64 @@ export async function GET(): Promise<NextResponse> {
       "Para Firebase: 'configurado: false' significa que falta a variável FIREBASE_SERVICE_ACCOUNT no Vercel. 'inicializado: false' com 'configurado: true' indica JSON inválido ou credencial revogada.",
     ],
   });
+}
+
+/**
+ * Mostra, sem expor dados pessoais, quais campos o objeto `paciente` da
+ * agenda realmente traz e em que formato vem `dataNascimento` (quando
+ * vem). Serve para decidir se a idade pode sair direto da agenda ou se
+ * precisa da coleção `pacientes` no Firestore + /Pacientes/Detalhar.
+ *
+ * Usa o mesmo cache de 5s do painel — abrir esta página não gera chamada
+ * extra à ProDoctor se as TVs estiverem ligadas.
+ */
+async function diagnosticoAgenda(): Promise<{
+  ok: boolean;
+  erro: string | null;
+  totalAgendamentos: number;
+  camposDoPaciente: string[];
+  comDataNascimento: number;
+  formatosDataNascimento: Record<string, number>;
+}> {
+  const vazio = {
+    totalAgendamentos: 0,
+    camposDoPaciente: [] as string[],
+    comDataNascimento: 0,
+    formatosDataNascimento: {} as Record<string, number>,
+  };
+  try {
+    const agenda = await buscarAgendamentosDoDia([...MEDICOS_PAINEL]);
+    const campos = new Set<string>();
+    let comData = 0;
+    const formatos: Record<string, number> = {};
+    for (const ag of agenda.agendamentos) {
+      const paciente: unknown = ag.paciente;
+      if (typeof paciente !== "object" || paciente === null) continue;
+      for (const k of Object.keys(paciente)) campos.add(k);
+      const dn = (paciente as { dataNascimento?: unknown }).dataNascimento;
+      if (typeof dn === "string" && dn.trim() !== "") {
+        comData += 1;
+        // Padrão do valor com dígitos trocados por "9": revela o formato
+        // sem revelar a data de ninguém.
+        const padrao = dn.replace(/\d/g, "9");
+        formatos[padrao] = (formatos[padrao] ?? 0) + 1;
+      }
+    }
+    return {
+      ok: true,
+      erro: null,
+      totalAgendamentos: agenda.agendamentos.length,
+      camposDoPaciente: Array.from(campos).sort(),
+      comDataNascimento: comData,
+      formatosDataNascimento: formatos,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      erro: err instanceof Error ? err.message : "Erro desconhecido",
+      ...vazio,
+    };
+  }
 }
 
 async function diagnosticoFirebase(): Promise<{

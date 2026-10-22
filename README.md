@@ -210,9 +210,12 @@ agenda real do dia para validar.
 - **Uma única consulta de agenda para todos os médicos do painel**, por
   ciclo: cada TV filtra a sua dupla em memória. Qualquer combinação de
   médicos nas telas compartilha a mesma chamada à ProDoctor.
-- Idade calculada a partir da data de nascimento que já vem na agenda
-  (sem chamada extra por paciente). Só cadastros sem data de nascimento
-  caem na busca individual, com orçamento de 2 por ciclo.
+- Idade sem repetir chamadas: cada paciente é consultado na ProDoctor
+  (`/Pacientes/Detalhar`) **uma vez na vida**, no máximo 2 por ciclo; a
+  data de nascimento fica guardada no Firestore (coleção `pacientes`) e
+  a idade é recalculada todo dia a partir dela. Se a agenda passar a
+  trazer `dataNascimento`, ela vira a fonte automaticamente (a página
+  `/api/diagnostico` mostra em `agendaAmostra` o que a agenda traz).
 - Freio automático: se a ProDoctor devolver "limite de requisições
   excedido" (429), o servidor para de chamar por 20 segundos e serve a
   última agenda boa (até 15 minutos). O rodapé fica amarelo
