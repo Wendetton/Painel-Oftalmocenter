@@ -49,8 +49,19 @@ export function usePainel(codigosMedicos: number[]): EstadoPainel {
     }
 
     let cancelado = false;
+    // Marca que pelo menos um ciclo foi pulado por a aba estar escondida —
+    // ao voltar ao primeiro plano, buscamos na hora em vez de esperar o
+    // próximo tick (até 5s mostrando dados velhos).
+    let pulouPorOculta = false;
 
     async function buscar(): Promise<void> {
+      // Aba/tablet em segundo plano: não gasta cota da ProDoctor. As TVs
+      // da clínica ficam sempre visíveis, então não são afetadas.
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        pulouPorOculta = true;
+        return;
+      }
+      pulouPorOculta = false;
       try {
         const resp = await fetch(`/api/painel?medicos=${chave}`, {
           cache: "no-store",
@@ -86,9 +97,17 @@ export function usePainel(codigosMedicos: number[]): EstadoPainel {
       void buscar();
     }, CONFIG.POLLING_MS);
 
+    const aoMudarVisibilidade = (): void => {
+      if (document.visibilityState === "visible" && pulouPorOculta) {
+        void buscar();
+      }
+    };
+    document.addEventListener("visibilitychange", aoMudarVisibilidade);
+
     return () => {
       cancelado = true;
       clearInterval(timer);
+      document.removeEventListener("visibilitychange", aoMudarVisibilidade);
     };
   }, [chave]);
 

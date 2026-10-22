@@ -206,8 +206,19 @@ agenda real do dia para validar.
 ### ✅ Já funciona
 - Conversa com a API do ProDoctor com autenticação correta.
 - Classifica cada agendamento do dia em um dos 7 estágios da clínica.
-- Cache de 10 segundos no servidor (não sobrecarrega o ProDoctor).
-- Cache de idade de paciente por 12h (idade não muda durante o dia).
+- Cache de 5 segundos no servidor (não sobrecarrega o ProDoctor).
+- **Uma única consulta de agenda para todos os médicos do painel**, por
+  ciclo: cada TV filtra a sua dupla em memória. Qualquer combinação de
+  médicos nas telas compartilha a mesma chamada à ProDoctor.
+- Idade calculada a partir da data de nascimento que já vem na agenda
+  (sem chamada extra por paciente). Só cadastros sem data de nascimento
+  caem na busca individual, com orçamento de 2 por ciclo.
+- Freio automático: se a ProDoctor devolver "limite de requisições
+  excedido" (429), o servidor para de chamar por 20 segundos e serve a
+  última agenda boa (até 15 minutos). O rodapé fica amarelo
+  ("ProDoctor · aguardando") em vez de apagar os cards.
+- Abas em segundo plano (tablet com o painel minimizado) param de
+  consultar até voltarem à frente.
 - Trata erros e quedas da API com elegância (não trava, devolve "fonte
   offline").
 

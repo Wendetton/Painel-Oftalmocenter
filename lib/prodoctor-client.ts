@@ -4,14 +4,22 @@
  * Responsabilidades:
  * - Adicionar headers de autenticação e fuso horário em todas as chamadas.
  * - Aplicar timeout e retry mínimo em erros transitórios de rede.
- * - Manter um cache em memória para os dados detalhados de paciente
- *   (idade não muda no dia, então 1 chamada por paciente por dia basta).
+ * - Respeitar o limite de 120 req/min da chave (compartilhada com o Hub e
+ *   o Agendamento Online): freio automático após um 429, uma única
+ *   consulta de agenda para todos os médicos e sem chamadas por paciente
+ *   quando a agenda já traz o que precisamos.
+ * - Manter caches em memória (agenda, médicos, idade de paciente).
  *
  * Tudo é executado SOMENTE no servidor — nunca importar este arquivo do
  * código que roda no navegador, senão a chave de API vaza.
  */
 
-import { CONFIG, lerConfigProDoctor, dataDeHojeBrasil } from "./configuracao";
+import {
+  CONFIG,
+  MEDICOS_PAINEL,
+  dataDeHojeBrasil,
+  lerConfigProDoctor,
+} from "./configuracao";
 import type {
   AgendamentoProDoctor,
   MedicoProDoctor,
@@ -65,12 +73,40 @@ function montarHeaders(): Record<string, string> {
   };
 }
 
+// ─── Freio automático (circuit breaker) para 429 ─────────────────────────────
+//
+// Quando a ProDoctor responde 429, QUALQUER chamada nova nesta instância
+// nos próximos COOLDOWN_429_MS falha na hora, sem sair para a rede. O
+// limite é por minuto; insistir com retries curtos (como fazíamos antes)
+// só gastava mais cota no pior momento. Durante a pausa, a agenda é
+// servida da última cópia boa (ver buscarAgendamentosDoDia).
+// ─────────────────────────────────────────────────────────────────────────────
+
+let cooldown429Ate = 0;
+
+function segundosDeCooldownRestantes(): number {
+  return Math.max(0, Math.ceil((cooldown429Ate - Date.now()) / 1000));
+}
+
+/** Verdadeiro enquanto a pausa pós-429 estiver em vigor. */
+export function emCooldown429(): boolean {
+  return Date.now() < cooldown429Ate;
+}
+
 async function chamar<TResposta>(
   caminho: string,
   init: { method: "GET" | "POST"; body?: unknown },
 ): Promise<TResposta> {
   const cfg = lerConfigProDoctor();
   const url = `${cfg.apiUrl.replace(/\/$/, "")}${caminho}`;
+
+  if (emCooldown429()) {
+    throw new ErroProDoctor(
+      `ProDoctor em pausa após 429 (limite de requisições) — ` +
+        `novas chamadas liberadas em ${segundosDeCooldownRestantes()}s.`,
+      429,
+    );
+  }
 
   let ultimoErro: unknown = null;
 
@@ -90,19 +126,24 @@ async function chamar<TResposta>(
       clearTimeout(timer);
 
       if (!resp.ok) {
-        // 4xx é erro de cliente — não adianta retry. Exceções:
-        // 429 (rate limit) é transitório por definição — espera mais que o
-        // backoff normal (o limite é por minuto) e tenta de novo.
         const corpoErro = await resp.text().catch(() => "");
+
         if (resp.status === 429) {
-          ultimoErro = new ErroProDoctor(
+          // Aciona o freio e NÃO tenta de novo: cada tentativa extra é
+          // mais uma requisição contada contra o limite por minuto.
+          cooldown429Ate = Date.now() + CONFIG.COOLDOWN_429_MS;
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[prodoctor] 429 em ${caminho}; pausando chamadas por ${CONFIG.COOLDOWN_429_MS / 1000}s.`,
+          );
+          throw new ErroProDoctor(
             `ProDoctor devolveu 429 Too Many Requests: ${corpoErro.slice(0, 500)}`,
             resp.status,
             corpoErro,
           );
-          await aguardar(BACKOFF_429_MS * (tentativa + 1));
-          continue;
         }
+
+        // Demais 4xx são erro de cliente — não adianta retry.
         if (resp.status >= 400 && resp.status < 500) {
           throw new ErroProDoctor(
             `ProDoctor devolveu ${resp.status} ${resp.statusText}: ${corpoErro.slice(0, 500)}`,
@@ -110,6 +151,7 @@ async function chamar<TResposta>(
             corpoErro,
           );
         }
+
         ultimoErro = new ErroProDoctor(
           `ProDoctor devolveu ${resp.status} ${resp.statusText}: ${corpoErro.slice(0, 500)}`,
           resp.status,
@@ -169,10 +211,6 @@ function aguardar(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Backoff específico para 429: o rate limit da ProDoctor é por minuto,
- * então esperar só 500ms quase sempre bate no limite de novo. */
-const BACKOFF_429_MS = 2_000;
-
 // ─── Cache em memória ────────────────────────────────────────────────────────
 //
 // Em Next.js no Vercel cada invocação serverless pode iniciar um processo
@@ -186,20 +224,24 @@ interface EntradaCache<T> {
   expiraEm: number;
 }
 
-const cachePainel = new Map<string, EntradaCache<AgendamentoProDoctor[]>>();
+const cachePainel = new Map<string, EntradaCache<AgendaDoDia>>();
 const cachePaciente = new Map<number, EntradaCache<{ idade: number | null }>>();
 let cacheMedicos: EntradaCache<MedicoProDoctor[]> | null = null;
 
 /**
  * Última resposta BOA da agenda, sem prazo de validade (só troca quando
- * chega uma nova). Se a ProDoctor falhar (429 na tempestade pós-deploy,
- * oscilação, etc.), servimos esta cópia em vez de derrubar o painel —
- * a TV continua mostrando os pacientes e o rodapé avisa que está stale.
+ * chega uma nova). Se a ProDoctor falhar (429, oscilação, etc.), servimos
+ * esta cópia em vez de derrubar o painel — a TV continua mostrando os
+ * pacientes e a resposta sinaliza `stale` para o rodapé avisar.
  */
-const ultimaAgendaBoa = new Map<
-  string,
-  { valor: AgendamentoProDoctor[]; obtidaEm: number }
->();
+const ultimaAgendaBoa = new Map<string, AgendaDoDia>();
+
+/**
+ * Chamadas à ProDoctor em andamento, por chave de cache ("single-flight").
+ * Se várias TVs pedem a agenda no mesmo instante e o cache expirou, todas
+ * esperam a MESMA requisição em vez de cada uma disparar a sua.
+ */
+const agendaEmVoo = new Map<string, Promise<AgendaDoDia>>();
 
 function lerCache<T>(entrada: EntradaCache<T> | undefined | null): T | null {
   if (!entrada) return null;
@@ -235,18 +277,68 @@ export async function buscarMedicos(): Promise<MedicoProDoctor[]> {
   return medicos;
 }
 
+/** Agenda do dia de um conjunto de médicos, com a origem dos dados. */
+export interface AgendaDoDia {
+  agendamentos: AgendamentoProDoctor[];
+  /** Instante (ms epoch) em que a ProDoctor devolveu esta agenda. */
+  obtidaEm: number;
+  /** Verdadeiro quando é a última cópia boa, servida porque a ProDoctor falhou. */
+  stale: boolean;
+}
+
+/**
+ * Agenda do dia dos médicos pedidos.
+ *
+ * Estratégia anti-rate-limit: a consulta à ProDoctor é sempre feita para o
+ * UNIVERSO de médicos do painel (MEDICOS_PAINEL ∪ pedidos), e o filtro por
+ * TV acontece aqui, em memória. Assim, a TV da recepção com [Paulo, Lilian]
+ * e o tablet dos exames com [Fernando] compartilham UMA chamada e UM cache,
+ * em vez de cada combinação gerar a sua. Com 3 médicos isso corta de até 6
+ * consultas distintas por ciclo para 1.
+ */
 export async function buscarAgendamentosDoDia(
   codigosMedicos: number[],
-): Promise<AgendamentoProDoctor[]> {
+): Promise<AgendaDoDia> {
   if (codigosMedicos.length === 0) {
-    return [];
+    return { agendamentos: [], obtidaEm: Date.now(), stale: false };
   }
 
   const dataHoje = dataDeHojeBrasil();
-  const chaveCache = `${dataHoje}|${[...codigosMedicos].sort((a, b) => a - b).join(",")}`;
-  const cached = lerCache(cachePainel.get(chaveCache));
-  if (cached) return cached;
+  const universo = Array.from(new Set([...MEDICOS_PAINEL, ...codigosMedicos])).sort(
+    (a, b) => a - b,
+  );
+  const chaveCache = `${dataHoje}|${universo.join(",")}`;
 
+  let agenda = lerCache(cachePainel.get(chaveCache));
+  if (!agenda) {
+    let emVoo = agendaEmVoo.get(chaveCache);
+    if (!emVoo) {
+      emVoo = buscarAgendaUpstream(chaveCache, dataHoje, universo).finally(() => {
+        agendaEmVoo.delete(chaveCache);
+      });
+      agendaEmVoo.set(chaveCache, emVoo);
+    }
+    agenda = await emVoo;
+  }
+
+  return filtrarPorMedicos(agenda, codigosMedicos);
+}
+
+function filtrarPorMedicos(agenda: AgendaDoDia, codigosMedicos: number[]): AgendaDoDia {
+  const pedidos = new Set(codigosMedicos);
+  return {
+    ...agenda,
+    agendamentos: agenda.agendamentos.filter(
+      (ag) => typeof ag.usuario?.codigo === "number" && pedidos.has(ag.usuario.codigo),
+    ),
+  };
+}
+
+async function buscarAgendaUpstream(
+  chaveCache: string,
+  dataHoje: string,
+  universo: number[],
+): Promise<AgendaDoDia> {
   let resposta: RespostaAgendamentosProDoctor;
   try {
     resposta = await chamar<RespostaAgendamentosProDoctor>(
@@ -257,31 +349,42 @@ export async function buscarAgendamentosDoDia(
           pagina: 1,
           quantidade: 5000,
           periodo: { dataInicial: dataHoje, dataFinal: dataHoje },
-          usuarios: codigosMedicos.map((codigo) => ({ codigo })),
+          usuarios: universo.map((codigo) => ({ codigo })),
         },
       },
     );
   } catch (err) {
     // Degradação suave: melhor mostrar a agenda de alguns minutos atrás
-    // do que uma tela vazia. Limitamos a 10 min de idade — mais velho que
-    // isso, o erro propaga (dados podem estar enganosos demais).
+    // do que uma tela vazia. Limitada a STALE_AGENDA_MS de idade — mais
+    // velha que isso, o erro propaga (dados podem estar enganosos demais).
     const stale = ultimaAgendaBoa.get(chaveCache);
-    if (stale && Date.now() - stale.obtidaEm < 10 * 60 * 1000) {
+    if (stale && Date.now() - stale.obtidaEm < CONFIG.STALE_AGENDA_MS) {
       // eslint-disable-next-line no-console
       console.warn(
         "[prodoctor] Agenda falhou; servindo última cópia boa.",
         err instanceof Error ? err.message : err,
       );
-      return stale.valor;
+      const servida: AgendaDoDia = { ...stale, stale: true };
+      // Guarda a cópia stale no cache curto também: durante a pausa
+      // pós-429 as TVs continuam pedindo a cada 5s, e sem isso cada
+      // pedido chegaria até aqui (barato, mas desnecessário).
+      cachePainel.set(chaveCache, {
+        valor: servida,
+        expiraEm: Date.now() + CONFIG.CACHE_PAINEL_MS,
+      });
+      return servida;
     }
     throw err;
   }
 
-  const agendamentos = resposta.payload?.agendamentos ?? [];
-  ultimaAgendaBoa.set(chaveCache, { valor: agendamentos, obtidaEm: Date.now() });
-
+  const agenda: AgendaDoDia = {
+    agendamentos: resposta.payload?.agendamentos ?? [],
+    obtidaEm: Date.now(),
+    stale: false,
+  };
+  ultimaAgendaBoa.set(chaveCache, agenda);
   cachePainel.set(chaveCache, {
-    valor: agendamentos,
+    valor: agenda,
     expiraEm: Date.now() + CONFIG.CACHE_PAINEL_MS,
   });
 
@@ -293,7 +396,7 @@ export async function buscarAgendamentosDoDia(
     }
   }
 
-  return agendamentos;
+  return agenda;
 }
 
 export async function buscarIdadePaciente(
@@ -330,13 +433,10 @@ export async function buscarIdadePaciente(
  * Busca as idades de vários pacientes respeitando um orçamento de chamadas
  * novas por ciclo.
  *
- * Motivação: após um deploy (ou cold start), o cache de idades está vazio
- * para TODOS os pacientes do dia. Buscar tudo de uma vez (dezenas de
- * chamadas × várias instâncias) estourava o rate limit de 120 req/min da
- * ProDoctor e derrubava até a consulta principal da agenda. Como idade é
- * informação acessória, quem não couber no orçamento fica sem idade NESTE
- * ciclo e é buscado nos próximos (o polling roda a cada 5s — em poucos
- * ciclos o cache do dia inteiro se completa).
+ * Hoje é só a RESERVA para pacientes cuja agenda veio sem dataNascimento
+ * (a idade normalmente é calculada direto da agenda, ver lib/idade.ts).
+ * Quem não couber no orçamento fica sem idade NESTE ciclo e é buscado nos
+ * próximos. Durante a pausa pós-429 não sai nenhuma chamada.
  */
 export async function buscarIdadesComOrcamento(
   codigos: number[],
@@ -354,6 +454,8 @@ export async function buscarIdadesComOrcamento(
       semCache.push(codigo);
     }
   }
+
+  if (emCooldown429()) return idades;
 
   await Promise.all(
     semCache.slice(0, maxConsultasNovas).map(async (codigo) => {

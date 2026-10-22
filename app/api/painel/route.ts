@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 
 import { classificarEstagio } from "@/lib/classificador";
-import { dataYYYYMMDDBrasil } from "@/lib/configuracao";
+import { CONFIG, dataYYYYMMDDBrasil } from "@/lib/configuracao";
+import { idadeDeDataNascimento } from "@/lib/idade";
 import {
   carregarEstadosDoDia,
   consultarEstadoAtual,
@@ -19,7 +20,12 @@ import {
   limparAusentes,
   registrarEstagio,
 } from "@/lib/rastreadorEstagio";
-import type { CardPaciente, RespostaPainel, TipoAgendamento } from "@/lib/tipos";
+import type {
+  CardPaciente,
+  MetaPainel,
+  RespostaPainel,
+  TipoAgendamento,
+} from "@/lib/tipos";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -69,23 +75,45 @@ export async function GET(req: Request): Promise<NextResponse<RespostaPainel>> {
   }
 
   try {
-    const agendamentos = await buscarAgendamentosDoDia(codigosMedicos);
+    const agenda = await buscarAgendamentosDoDia(codigosMedicos);
+    const agendamentos = agenda.agendamentos;
 
-    // Busca idade dos pacientes em paralelo, mas com cache: a maioria dos
-    // pacientes do dia já estará no cache após o primeiro ciclo.
-    const codigosPaciente = Array.from(
-      new Set(
-        agendamentos
-          .map((a) => a.paciente?.codigo)
-          .filter((c): c is number => typeof c === "number"),
-      ),
+    // Idade: a própria resposta da agenda traz `paciente.dataNascimento`,
+    // então calculamos aqui sem nenhuma chamada extra à ProDoctor. Só os
+    // pacientes cujo cadastro veio sem data de nascimento caem na reserva
+    // (/Pacientes/Detalhar), com orçamento pequeno por ciclo — quem ficar
+    // de fora aparece sem idade por alguns segundos e entra nos próximos.
+    const idades = new Map<number, number | null>();
+    const semDataNascimento: number[] = [];
+    for (const ag of agendamentos) {
+      const codigo = ag.paciente?.codigo;
+      if (typeof codigo !== "number" || idades.has(codigo)) continue;
+      const idade = idadeDeDataNascimento(ag.paciente?.dataNascimento);
+      if (idade !== null) {
+        idades.set(codigo, idade);
+      } else {
+        semDataNascimento.push(codigo);
+      }
+    }
+    const idadesDaAgenda = idades.size;
+
+    const idadesReserva = await buscarIdadesComOrcamento(
+      semDataNascimento,
+      CONFIG.ORCAMENTO_IDADE_DETALHAR,
     );
+    let idadesDetalhar = 0;
+    for (const [codigo, idade] of idadesReserva) {
+      idades.set(codigo, idade);
+      if (idade !== null) idadesDetalhar += 1;
+    }
 
-    // No máximo 8 consultas novas de idade por ciclo: pós-deploy o cache
-    // está vazio pro dia inteiro, e buscar tudo de uma vez estourava o
-    // rate limit da ProDoctor. Quem ficar de fora aparece sem idade por
-    // alguns segundos e entra nos próximos ciclos de polling.
-    const idades = await buscarIdadesComOrcamento(codigosPaciente, 8);
+    const meta: MetaPainel = {
+      agendaStale: agenda.stale,
+      agendaObtidaEm: new Date(agenda.obtidaEm).toISOString(),
+      idadesDaAgenda,
+      idadesDetalhar,
+      semIdade: semDataNascimento.length - idadesDetalhar,
+    };
 
     // Hidrata o rastreador com o estado salvo no Firestore na PRIMEIRA
     // chamada após cold start. Isso garante que o cronômetro de cada
@@ -227,11 +255,17 @@ export async function GET(req: Request): Promise<NextResponse<RespostaPainel>> {
     // (cancelados, próximo dia já chegou, etc.).
     limparAusentes(idsAtivos);
 
+    // Agenda stale (ProDoctor falhou ou está em pausa pós-429): a TV
+    // continua com os cards, mas `atualizadoEm` reflete quando os dados
+    // foram realmente obtidos e o rodapé mostra o aviso.
     return NextResponse.json({
       cards,
-      atualizadoEm: new Date().toISOString(),
+      atualizadoEm: new Date(agenda.obtidaEm).toISOString(),
       fonteOnline: true,
-      ultimoErro: null,
+      ultimoErro: agenda.stale
+        ? "ProDoctor indisponível no momento (limite de requisições ou oscilação); mostrando a última agenda recebida."
+        : null,
+      meta,
     });
   } catch (err) {
     const mensagem = err instanceof Error ? err.message : "Erro desconhecido";

@@ -34,6 +34,12 @@ export interface MedicoProDoctor {
 export interface PacienteIdentificacao {
   codigo: number | null;
   nome: string | null;
+  /**
+   * "DD/MM/YYYY" (schema PacienteAgendamentoViewModel). Vem junto na
+   * resposta da agenda — permite calcular a idade sem uma chamada extra
+   * a /Pacientes/Detalhar por paciente. Pode ser null/ausente.
+   */
+  dataNascimento?: string | null;
 }
 
 export interface ConvenioIdentificacao {
@@ -143,11 +149,31 @@ export interface CardPaciente {
   chaveAgendamento: ChaveAgendamento | null;
 }
 
+/**
+ * Informações de diagnóstico sobre a origem dos dados desta resposta.
+ * Opcional: a TV não depende delas; servem para conferir em produção
+ * (ex.: `curl /api/painel?medicos=2`) que a idade está vindo da agenda e
+ * que a agenda não está sendo servida de uma cópia velha.
+ */
+export interface MetaPainel {
+  /** A agenda veio de uma cópia guardada porque a ProDoctor falhou. */
+  agendaStale: boolean;
+  /** Instante (ISO) em que a agenda foi obtida da ProDoctor. */
+  agendaObtidaEm: string;
+  /** Pacientes com idade calculada direto da agenda (sem chamada extra). */
+  idadesDaAgenda: number;
+  /** Pacientes com idade obtida via /Pacientes/Detalhar (reserva). */
+  idadesDetalhar: number;
+  /** Pacientes sem idade nesta resposta. */
+  semIdade: number;
+}
+
 export interface RespostaPainel {
   cards: CardPaciente[];
   atualizadoEm: string;
   fonteOnline: boolean;
   ultimoErro: string | null;
+  meta?: MetaPainel;
 }
 
 export interface RespostaMedicos {

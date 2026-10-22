@@ -27,6 +27,29 @@ export const CONFIG = {
 
   /** Backoff entre retries (ms). */
   RETRY_BACKOFF_MS: 500,
+
+  /**
+   * Freio automático após um 429 (limite de requisições da ProDoctor).
+   * Durante esta janela NENHUMA chamada nova sai para a ProDoctor — o
+   * painel serve a última agenda boa. O limite contratual é por minuto
+   * (120 req/min por chave, compartilhada com o Hub e o Agendamento
+   * Online), então insistir em segundos só prolonga o bloqueio.
+   */
+  COOLDOWN_429_MS: 20_000,
+
+  /**
+   * Por quanto tempo a última agenda boa pode ser servida quando a
+   * ProDoctor falha. Mais velha que isso, o erro propaga (dados ficariam
+   * enganosos demais na TV).
+   */
+  STALE_AGENDA_MS: 15 * 60 * 1000,
+
+  /**
+   * Orçamento de chamadas /Pacientes/Detalhar por ciclo de polling, usado
+   * SÓ como reserva para pacientes cuja agenda veio sem dataNascimento
+   * (a idade normalmente é calculada direto da agenda, sem chamada extra).
+   */
+  ORCAMENTO_IDADE_DETALHAR: 2,
 } as const;
 
 /**
@@ -44,6 +67,15 @@ export const APELIDOS_MEDICOS: Record<number, string> = {
   3: "Dra Lilian",
   4: "Dr Fernando",
 };
+
+/**
+ * Códigos dos médicos cuja agenda o painel acompanha. O servidor busca a
+ * agenda do dia de TODOS eles numa única chamada à ProDoctor e filtra
+ * por TV internamente — assim, qualquer combinação de médicos escolhida
+ * nas telas compartilha a mesma consulta (e o mesmo cache). Deriva do
+ * mapa de apelidos para não precisar manter duas listas.
+ */
+export const MEDICOS_PAINEL: readonly number[] = Object.keys(APELIDOS_MEDICOS).map(Number);
 
 /**
  * Cor identificadora de cada médico (tag colorida no card). Cores
