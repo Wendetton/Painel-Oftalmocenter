@@ -37,7 +37,15 @@ export default function RodapeStatus({
     <div className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 px-6 py-2 text-xs text-slate-600 backdrop-blur">
       <div className="mx-auto flex max-w-[1800px] items-center justify-between">
         <span className="flex items-center gap-3">
-          {fonteOnline ? (
+          {fonteOnline && ultimoErro ? (
+            // Online, mas servindo a última agenda boa (ProDoctor em pausa
+            // pós-429 ou oscilando): amarelo, não vermelho — os cards na
+            // tela são reais, só podem estar alguns instantes atrasados.
+            <span className="flex items-center gap-1.5 text-amber-700">
+              <Bolinha cor="bg-amber-500" />
+              ProDoctor · aguardando
+            </span>
+          ) : fonteOnline ? (
             <span className="flex items-center gap-1.5 text-emerald-700">
               <Bolinha cor="bg-emerald-500" />
               ProDoctor · conectado
@@ -53,8 +61,12 @@ export default function RodapeStatus({
               última atualização às {formatarHora(atualizadoEm)}
             </span>
           )}
-          {ultimoErro && fonteOnline === false && (
-            <span className="hidden max-w-md truncate text-red-600 md:inline">
+          {ultimoErro && (
+            <span
+              className={`hidden max-w-md truncate md:inline ${
+                fonteOnline ? "text-amber-600" : "text-red-600"
+              }`}
+            >
               {ultimoErro}
             </span>
           )}
