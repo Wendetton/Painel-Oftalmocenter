@@ -20,6 +20,7 @@ import {
   dataDeHojeBrasil,
   lerConfigProDoctor,
 } from "./configuracao";
+import type { DadosPaciente } from "./pacientesPersistente";
 import type {
   AgendamentoProDoctor,
   MedicoProDoctor,
@@ -225,7 +226,7 @@ interface EntradaCache<T> {
 }
 
 const cachePainel = new Map<string, EntradaCache<AgendaDoDia>>();
-const cachePaciente = new Map<number, EntradaCache<{ idade: number | null }>>();
+const cachePaciente = new Map<number, EntradaCache<DadosPaciente>>();
 let cacheMedicos: EntradaCache<MedicoProDoctor[]> | null = null;
 
 /**
@@ -399,30 +400,53 @@ async function buscarAgendaUpstream(
   return agenda;
 }
 
-export async function buscarIdadePaciente(
-  codigoPaciente: number,
-): Promise<number | null> {
-  const cached = lerCache(cachePaciente.get(codigoPaciente));
-  if (cached) return cached.idade;
+// ─── Pacientes (data de nascimento / idade) ──────────────────────────────────
+//
+// A orquestração das fontes (memória → agenda → Firestore → Detalhar) vive
+// em lib/idadesPacientes.ts. Aqui ficam só o cache em memória e a chamada
+// à ProDoctor.
+// ─────────────────────────────────────────────────────────────────────────────
 
+/** Dados do paciente em memória nesta instância (12h), ou null. */
+export function pacienteEmCache(codigo: number): DadosPaciente | null {
+  return lerCache(cachePaciente.get(codigo));
+}
+
+/** Registra na memória dados vindos de outra fonte (agenda, Firestore). */
+export function registrarPacienteEmCache(codigo: number, dados: DadosPaciente): void {
+  cachePaciente.set(codigo, {
+    valor: dados,
+    expiraEm: Date.now() + CONFIG.CACHE_PACIENTE_MS,
+  });
+}
+
+/**
+ * GET /Pacientes/Detalhar — 1 chamada por paciente. Devolve data de
+ * nascimento e idade informadas pela ProDoctor, ou null se falhar.
+ */
+async function buscarPacienteDetalhar(codigoPaciente: number): Promise<DadosPaciente | null> {
   try {
     const resposta = await chamar<RespostaPacienteDetalhar>(
       `/api/v1/Pacientes/Detalhar/${codigoPaciente}`,
       { method: "GET" },
     );
 
-    const idade = resposta.payload?.paciente?.idade ?? null;
-    cachePaciente.set(codigoPaciente, {
-      valor: { idade },
-      expiraEm: Date.now() + CONFIG.CACHE_PACIENTE_MS,
-    });
-    return idade;
+    const p = resposta.payload?.paciente;
+    const dados: DadosPaciente = {
+      dataNascimento:
+        typeof p?.dataNascimento === "string" && p.dataNascimento.trim() !== ""
+          ? p.dataNascimento.trim()
+          : null,
+      idade: typeof p?.idade === "number" ? p.idade : null,
+    };
+    registrarPacienteEmCache(codigoPaciente, dados);
+    return dados;
   } catch {
     // Se um paciente individual falhar, registra no cache curto para não
     // martelar a API durante o ciclo, mas não propaga o erro — idade é
     // informação acessória, não pode derrubar o painel inteiro.
     cachePaciente.set(codigoPaciente, {
-      valor: { idade: null },
+      valor: { dataNascimento: null, idade: null },
       expiraEm: Date.now() + 60_000,
     });
     return null;
@@ -430,40 +454,25 @@ export async function buscarIdadePaciente(
 }
 
 /**
- * Busca as idades de vários pacientes respeitando um orçamento de chamadas
- * novas por ciclo.
- *
- * Hoje é só a RESERVA para pacientes cuja agenda veio sem dataNascimento
- * (a idade normalmente é calculada direto da agenda, ver lib/idade.ts).
- * Quem não couber no orçamento fica sem idade NESTE ciclo e é buscado nos
- * próximos. Durante a pausa pós-429 não sai nenhuma chamada.
+ * Busca na ProDoctor os dados de vários pacientes respeitando um orçamento
+ * de chamadas novas por ciclo. Quem não couber fica de fora NESTE ciclo e
+ * entra nos próximos. Durante a pausa pós-429 não sai nenhuma chamada.
+ * Só devolve entradas para os pacientes efetivamente consultados.
  */
-export async function buscarIdadesComOrcamento(
+export async function buscarPacientesComOrcamento(
   codigos: number[],
   maxConsultasNovas: number,
-): Promise<Map<number, number | null>> {
-  const idades = new Map<number, number | null>();
-  const semCache: number[] = [];
-
-  for (const codigo of codigos) {
-    const cached = lerCache(cachePaciente.get(codigo));
-    if (cached) {
-      idades.set(codigo, cached.idade);
-    } else {
-      idades.set(codigo, null);
-      semCache.push(codigo);
-    }
-  }
-
-  if (emCooldown429()) return idades;
+): Promise<Map<number, DadosPaciente | null>> {
+  const resultado = new Map<number, DadosPaciente | null>();
+  if (emCooldown429()) return resultado;
 
   await Promise.all(
-    semCache.slice(0, maxConsultasNovas).map(async (codigo) => {
-      idades.set(codigo, await buscarIdadePaciente(codigo));
+    codigos.slice(0, maxConsultasNovas).map(async (codigo) => {
+      resultado.set(codigo, await buscarPacienteDetalhar(codigo));
     }),
   );
 
-  return idades;
+  return resultado;
 }
 
 export { ErroProDoctor };

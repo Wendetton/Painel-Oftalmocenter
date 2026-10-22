@@ -160,11 +160,15 @@ export interface MetaPainel {
   agendaStale: boolean;
   /** Instante (ISO) em que a agenda foi obtida da ProDoctor. */
   agendaObtidaEm: string;
+  /** Pacientes do dia cuja idade veio da memória da instância. */
+  idadesMemoria: number;
   /** Pacientes com idade calculada direto da agenda (sem chamada extra). */
   idadesDaAgenda: number;
-  /** Pacientes com idade obtida via /Pacientes/Detalhar (reserva). */
+  /** Pacientes com idade vinda do Firestore (coleção `pacientes`). */
+  idadesFirestore: number;
+  /** Pacientes consultados via /Pacientes/Detalhar neste ciclo (reserva). */
   idadesDetalhar: number;
-  /** Pacientes sem idade nesta resposta. */
+  /** Pacientes sem idade nesta resposta (entram nos próximos ciclos). */
   semIdade: number;
 }
 

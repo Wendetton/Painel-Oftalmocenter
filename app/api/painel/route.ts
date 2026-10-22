@@ -2,17 +2,14 @@ import { NextResponse } from "next/server";
 
 import { classificarEstagio } from "@/lib/classificador";
 import { CONFIG, dataYYYYMMDDBrasil } from "@/lib/configuracao";
-import { idadeDeDataNascimento } from "@/lib/idade";
+import { resolverIdades } from "@/lib/idadesPacientes";
 import {
   carregarEstadosDoDia,
   consultarEstadoAtual,
   salvarEstadoAtual,
 } from "@/lib/estadoAtualPersistente";
 import { gravarEventoTransicao } from "@/lib/eventoEstagio";
-import {
-  buscarAgendamentosDoDia,
-  buscarIdadesComOrcamento,
-} from "@/lib/prodoctor-client";
+import { buscarAgendamentosDoDia } from "@/lib/prodoctor-client";
 import {
   forcarEntrada,
   hidratarEstados,
@@ -78,41 +75,22 @@ export async function GET(req: Request): Promise<NextResponse<RespostaPainel>> {
     const agenda = await buscarAgendamentosDoDia(codigosMedicos);
     const agendamentos = agenda.agendamentos;
 
-    // Idade: a própria resposta da agenda traz `paciente.dataNascimento`,
-    // então calculamos aqui sem nenhuma chamada extra à ProDoctor. Só os
-    // pacientes cujo cadastro veio sem data de nascimento caem na reserva
-    // (/Pacientes/Detalhar), com orçamento pequeno por ciclo — quem ficar
-    // de fora aparece sem idade por alguns segundos e entra nos próximos.
-    const idades = new Map<number, number | null>();
-    const semDataNascimento: number[] = [];
-    for (const ag of agendamentos) {
-      const codigo = ag.paciente?.codigo;
-      if (typeof codigo !== "number" || idades.has(codigo)) continue;
-      const idade = idadeDeDataNascimento(ag.paciente?.dataNascimento);
-      if (idade !== null) {
-        idades.set(codigo, idade);
-      } else {
-        semDataNascimento.push(codigo);
-      }
-    }
-    const idadesDaAgenda = idades.size;
-
-    const idadesReserva = await buscarIdadesComOrcamento(
-      semDataNascimento,
+    // Idade: memória → agenda → Firestore → /Pacientes/Detalhar (com
+    // orçamento pequeno por ciclo; quem ficar de fora aparece sem idade
+    // por alguns segundos e entra nos próximos). Ver lib/idadesPacientes.
+    const { idades, origem } = await resolverIdades(
+      agendamentos,
       CONFIG.ORCAMENTO_IDADE_DETALHAR,
     );
-    let idadesDetalhar = 0;
-    for (const [codigo, idade] of idadesReserva) {
-      idades.set(codigo, idade);
-      if (idade !== null) idadesDetalhar += 1;
-    }
 
     const meta: MetaPainel = {
       agendaStale: agenda.stale,
       agendaObtidaEm: new Date(agenda.obtidaEm).toISOString(),
-      idadesDaAgenda,
-      idadesDetalhar,
-      semIdade: semDataNascimento.length - idadesDetalhar,
+      idadesMemoria: origem.memoria,
+      idadesDaAgenda: origem.agenda,
+      idadesFirestore: origem.firestore,
+      idadesDetalhar: origem.detalhar,
+      semIdade: origem.semIdade,
     };
 
     // Hidrata o rastreador com o estado salvo no Firestore na PRIMEIRA
