@@ -1,11 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { dataYYYYMMDDBrasil } from "@/lib/configuracao";
-import {
-  buscarEventosPeriodo,
-  type EventoBruto,
-  type EventosPeriodo,
-} from "@/lib/lerEventos";
+import { buscarEventosComCache, type EventoBruto } from "@/lib/lerEventos";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -19,60 +14,6 @@ interface RespostaEventos {
   dataFim: string;
   fonteOnline: boolean;
   ultimoErro: string | null;
-}
-
-/**
- * Cache em memória das consultas ao Firestore.
- *
- * Cada evento lido conta na cota diária do Firestore (a mesma que mantém
- * os cronômetros das TVs), e uma consulta de 30 dias lê alguns milhares.
- * Sem cache, trocar de filtro e voltar repetia a leitura inteira.
- *
- * - Período que inclui hoje: 1 minuto (os dados ainda estão mudando).
- * - Período só de dias passados: 30 minutos (não muda mais).
- *
- * Este endpoint não faz nenhuma chamada à API do ProDoctor.
- */
-const TTL_COM_HOJE_MS = 60_000;
-const TTL_PASSADO_MS = 30 * 60_000;
-const MAX_ENTRADAS = 12;
-
-const cache = new Map<string, { expiraEm: number; dados: EventosPeriodo }>();
-const emAndamento = new Map<string, Promise<EventosPeriodo>>();
-
-async function buscarComCache(
-  dataInicio: string,
-  dataFim: string,
-): Promise<EventosPeriodo> {
-  const chave = `${dataInicio}|${dataFim}`;
-  const agora = Date.now();
-
-  const guardado = cache.get(chave);
-  if (guardado && guardado.expiraEm > agora) return guardado.dados;
-
-  // Duas abas pedindo o mesmo período ao mesmo tempo compartilham a leitura.
-  const pendente = emAndamento.get(chave);
-  if (pendente) return pendente;
-
-  const promessa = buscarEventosPeriodo(dataInicio, dataFim)
-    .then((dados) => {
-      const incluiHoje = dataFim >= dataYYYYMMDDBrasil();
-      cache.set(chave, {
-        dados,
-        expiraEm: Date.now() + (incluiHoje ? TTL_COM_HOJE_MS : TTL_PASSADO_MS),
-      });
-      if (cache.size > MAX_ENTRADAS) {
-        const maisAntiga = cache.keys().next().value;
-        if (maisAntiga !== undefined) cache.delete(maisAntiga);
-      }
-      return dados;
-    })
-    .finally(() => {
-      emAndamento.delete(chave);
-    });
-
-  emAndamento.set(chave, promessa);
-  return promessa;
 }
 
 /**
@@ -107,6 +48,10 @@ function erro(
   );
 }
 
+/**
+ * Eventos do período para o dashboard. Lê só o Firestore (com cache em
+ * memória — ver lib/lerEventos); não faz nenhuma chamada à API do ProDoctor.
+ */
 export async function GET(req: Request): Promise<NextResponse<RespostaEventos>> {
   const url = new URL(req.url);
   const dataInicio = parseData(url.searchParams.get("dataInicio"));
@@ -131,7 +76,7 @@ export async function GET(req: Request): Promise<NextResponse<RespostaEventos>> 
   }
 
   try {
-    const { eventos, truncado } = await buscarComCache(dataInicio, dataFim);
+    const { eventos, truncado } = await buscarEventosComCache(dataInicio, dataFim);
     return NextResponse.json({
       eventos,
       totalRetornados: eventos.length,

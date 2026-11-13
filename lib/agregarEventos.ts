@@ -240,6 +240,8 @@ export interface ResumoGeral {
   pacientesAtendidos: number;
   /** Pacientes com a hora real de chegada registrada. */
   pacientesComChegada: number;
+  /** Primeiro dia ("YYYY-MM-DD") do período com chegada registrada. */
+  chegadaDesde: string | null;
   /** Tempo do início ao atendimento concluído. */
   tempoTotal: Estatistica | null;
   /**
@@ -255,9 +257,19 @@ export interface ResumoGeral {
 }
 
 /**
- * Tempos totais do período. Se algum paciente tem chegada registrada,
- * usa SÓ esses (misturar as duas réguas daria um número sem significado);
- * senão cai para o primeiro movimento.
+ * Um "tempo típico" só é mostrado com pelo menos esta quantidade de
+ * pacientes. Mediana de 1 ou 2 pacientes não representa a clínica — é só
+ * o tempo daquele paciente — e mostrá-la como se fosse o resultado do
+ * período engana.
+ */
+export const AMOSTRA_MINIMA = 5;
+
+/**
+ * Tempos totais do período, sem misturar réguas:
+ * - se há pacientes suficientes com chegada registrada, usa SÓ esses
+ *   (tempo real, da chegada ao atendimento);
+ * - senão, usa os que não têm chegada, contando do primeiro movimento
+ *   (saída da recepção) — e o dashboard diz isso na tela.
  */
 function temposTotais(trajetorias: TrajetoriaPaciente[]): {
   itens: { t: TrajetoriaPaciente; min: number }[];
@@ -265,10 +277,13 @@ function temposTotais(trajetorias: TrajetoriaPaciente[]): {
 } {
   const concluidas = trajetorias.filter((t) => t.tempoTotalMin !== null);
   const comChegada = concluidas.filter((t) => t.chegadaMs !== null);
-  const base = comChegada.length > 0 ? comChegada : concluidas;
+  const semChegada = concluidas.filter((t) => t.chegadaMs === null);
+  const usarChegada =
+    comChegada.length >= AMOSTRA_MINIMA || semChegada.length === 0;
+  const base = usarChegada ? comChegada : semChegada;
   return {
     itens: base.map((t) => ({ t, min: t.tempoTotalMin ?? 0 })),
-    desdeChegada: comChegada.length > 0,
+    desdeChegada: usarChegada,
   };
 }
 
@@ -280,6 +295,12 @@ export function calcularResumo(trajetorias: TrajetoriaPaciente[]): ResumoGeral {
       t.estadias.some((e) => e.estagio === "ATENDIDO"),
     ).length,
     pacientesComChegada: trajetorias.filter((t) => t.chegadaMs !== null).length,
+    chegadaDesde: trajetorias
+      .filter((t) => t.chegadaMs !== null)
+      .reduce<string | null>(
+        (menor, t) => (menor === null || t.data < menor ? t.data : menor),
+        null,
+      ),
     tempoTotal: estatistica(totais.itens.map((i) => i.min)),
     tempoTotalDesdeChegada: totais.desdeChegada,
     recepcao: estatisticaDoEstagio(trajetorias, "RECEPCAO"),
@@ -352,10 +373,7 @@ function rankingPorConvenio(
       (i): i is { rotulo: string; est: Estatistica } => i.est !== null,
     );
 
-  // Se nenhum convênio atinge a amostra mínima (período curto), mostra
-  // todos em vez de um gráfico vazio.
-  const suficientes = todos.filter((i) => i.est.n >= AMOSTRA_MINIMA_CONVENIO);
-  const base = suficientes.length > 0 ? suficientes : todos;
+  const base = todos.filter((i) => i.est.n >= AMOSTRA_MINIMA_CONVENIO);
 
   return base
     .map(({ rotulo, est }) => ({

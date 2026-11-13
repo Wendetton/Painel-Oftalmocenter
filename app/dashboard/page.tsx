@@ -34,6 +34,7 @@ import Filtros, { type PeriodoFiltro } from "@/components/dashboard/Filtros";
 import KpiCard from "@/components/dashboard/KpiCard";
 
 import {
+  AMOSTRA_MINIMA,
   AMOSTRA_MINIMA_CONVENIO,
   calcularResumo,
   distribuicaoPorTipo,
@@ -75,6 +76,8 @@ export default function DashboardPage() {
   const [truncado, setTruncado] = useState(false);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+  /** Incrementa para forçar nova leitura (ex.: após recuperar chegadas). */
+  const [recarga, setRecarga] = useState(0);
 
   useEffect(() => {
     let cancelado = false;
@@ -104,7 +107,7 @@ export default function DashboardPage() {
     return () => {
       cancelado = true;
     };
-  }, [periodo.dataInicio, periodo.dataFim]);
+  }, [periodo.dataInicio, periodo.dataFim, recarga]);
 
   const todas = useMemo(() => reconstruirTrajetorias(eventos), [eventos]);
   const medicos = useMemo(() => medicosDoPeriodo(todas), [todas]);
@@ -130,13 +133,18 @@ export default function DashboardPage() {
         { rotulo: "Sala de exames", est: resumo.exames },
         { rotulo: "Em dilatação", est: resumo.dilatacao },
         { rotulo: "Pronto p/ médico", est: resumo.prontoMedico },
-      ].map(({ rotulo, est }) => ({
-        rotulo,
-        valor: est?.mediana ?? 0,
-        valorFormatado: est
-          ? `${formatarMin(est.mediana)} · ${est.n} pac`
-          : "—",
-      })),
+      ].map(({ rotulo, est }) => {
+        const ok = suficiente(est);
+        return {
+          rotulo,
+          valor: ok ? ok.mediana : 0,
+          valorFormatado: ok
+            ? `${formatarMin(ok.mediana)} · ${ok.n} pac`
+            : est
+              ? `amostra pequena (${est.n} pac)`
+              : "—",
+        };
+      }),
     [resumo],
   );
 
@@ -234,22 +242,13 @@ export default function DashboardPage() {
         )}
 
         {!carregando && !erro && semChegada > 0 && (
-          <div className="mb-4 rounded-lg border border-slate-200 bg-white px-4 py-3 text-xs text-slate-600">
-            {resumo.pacientesComChegada === 0 ? (
-              <>
-                Este período só tem registros antigos, sem a hora de chegada
-                do paciente: o tempo de recepção não foi medido e o tempo
-                total conta a partir da saída da recepção.
-              </>
-            ) : (
-              <>
-                {semChegada} de {resumo.pacientesTotais} pacientes são de
-                registros antigos, sem hora de chegada. Eles contam nos
-                volumes e nos tempos de exames/dilatação/médico, mas ficam
-                fora do tempo total e do tempo de recepção.
-              </>
-            )}
-          </div>
+          <AvisoSemChegada
+            semChegada={semChegada}
+            total={resumo.pacientesTotais}
+            chegadaDesde={resumo.chegadaDesde}
+            periodo={periodo}
+            aoRecuperar={() => setRecarga((n) => n + 1)}
+          />
         )}
 
         {/* KPIs */}
@@ -273,17 +272,17 @@ export default function DashboardPage() {
           />
           <KpiCard
             rotulo="Tempo total típico"
-            valor={formatarMin(resumo.tempoTotal?.mediana)}
+            valor={formatarMin(suficiente(resumo.tempoTotal)?.mediana)}
             descricao={descreverTempo(
               resumo.tempoTotal,
               resumo.tempoTotalDesdeChegada
                 ? "Da chegada ao atendimento"
-                : "Da saída da recepção ao atendimento",
+                : "Da saída da recepção ao atendimento (sem hora de chegada)",
             )}
           />
           <KpiCard
             rotulo="Recepção típica"
-            valor={formatarMin(resumo.recepcao?.mediana)}
+            valor={formatarMin(suficiente(resumo.recepcao)?.mediana)}
             descricao={descreverTempo(
               resumo.recepcao,
               "Da chegada até sair da recepção",
@@ -336,7 +335,8 @@ export default function DashboardPage() {
 
         <footer className="mt-8 border-t border-slate-200 pt-4 text-xs text-slate-500">
           Tempos mostram o paciente típico (mediana): metade ficou menos,
-          metade ficou mais. “Pronto p/ médico” inclui a espera e a
+          metade ficou mais. Um tempo só aparece quando há pelo menos{" "}
+          {AMOSTRA_MINIMA} pacientes medidos. “Pronto p/ médico” inclui a espera e a
           consulta. Nos rankings por convênio entram os 10 maiores tempos
           entre convênios com pelo menos {AMOSTRA_MINIMA_CONVENIO}{" "}
           pacientes.{" "}
@@ -349,9 +349,157 @@ export default function DashboardPage() {
   );
 }
 
+/** A estatística só vale como "tempo típico" com amostra mínima. */
+function suficiente(est: Estatistica | null): Estatistica | null {
+  return est && est.n >= AMOSTRA_MINIMA ? est : null;
+}
+
 function descreverTempo(est: Estatistica | null, oQueMede: string): string {
-  if (!est) return oQueMede;
-  return `${oQueMede} · média ${formatarMin(est.media)} · 90% até ${formatarMin(est.p90)}`;
+  if (!est) return `${oQueMede} · nenhum paciente medido no período`;
+  if (est.n < AMOSTRA_MINIMA) {
+    return `${oQueMede} · só ${est.n} paciente${est.n > 1 ? "s" : ""} medido${est.n > 1 ? "s" : ""} — pouco para um tempo confiável`;
+  }
+  return `${oQueMede} · ${est.n} pacientes · média ${formatarMin(est.media)} · 90% até ${formatarMin(est.p90)}`;
+}
+
+function dataBR(iso: string): string {
+  return `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
+}
+
+interface RespostaRecuperacao {
+  ok: boolean;
+  mensagem?: string;
+  diasProcessados?: number;
+  chegadasEncontradas?: number;
+  chamadasProDoctor?: number;
+}
+
+/**
+ * Aviso de que parte do período não tem hora de chegada, com o botão que
+ * busca essa hora no ProDoctor (uma vez por dia antigo; pede o PIN).
+ */
+function AvisoSemChegada({
+  semChegada,
+  total,
+  chegadaDesde,
+  periodo,
+  aoRecuperar,
+}: {
+  semChegada: number;
+  total: number;
+  chegadaDesde: string | null;
+  periodo: PeriodoFiltro;
+  aoRecuperar: () => void;
+}) {
+  const [aberto, setAberto] = useState(false);
+  const [pin, setPin] = useState("");
+  const [enviando, setEnviando] = useState(false);
+  const [retorno, setRetorno] = useState<{ ok: boolean; texto: string } | null>(null);
+
+  async function recuperar(): Promise<void> {
+    setEnviando(true);
+    setRetorno(null);
+    try {
+      const resp = await fetch("/api/chegadas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin, ...periodo }),
+      });
+      const dados = (await resp.json()) as RespostaRecuperacao;
+      if (!dados.ok) {
+        setRetorno({ ok: false, texto: dados.mensagem ?? "Não foi possível recuperar." });
+        return;
+      }
+      const encontradas = dados.chegadasEncontradas ?? 0;
+      setRetorno({
+        ok: true,
+        texto:
+          (dados.diasProcessados ?? 0) === 0
+            ? "Este período já tinha sido recuperado. Os pacientes que continuam sem chegada não têm essa hora no ProDoctor."
+            : `${encontradas} chegadas encontradas no ProDoctor em ${dados.diasProcessados} dias (${dados.chamadasProDoctor} consulta${dados.chamadasProDoctor === 1 ? "" : "s"} à API).`,
+      });
+      setAberto(false);
+      setPin("");
+      aoRecuperar();
+    } catch {
+      setRetorno({ ok: false, texto: "Falha de conexão. Tente de novo." });
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  return (
+    <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      <p className="font-medium">
+        {semChegada} de {total} pacientes deste período não têm a hora de
+        chegada registrada
+      </p>
+      <p className="mt-1 text-xs">
+        São registros de antes de o painel gravar a chegada
+        {chegadaDesde ? ` (ela é gravada desde ${dataBR(chegadaDesde)})` : ""}.
+        Eles contam nos volumes e nos tempos de exames, dilatação e médico,
+        mas não têm tempo de recepção, e o tempo total deles só conta a
+        partir da saída da recepção.{" "}
+        A hora de chegada desses dias pode ser buscada no ProDoctor.
+      </p>
+
+      {!aberto ? (
+        <button
+          type="button"
+          onClick={() => setAberto(true)}
+          className="mt-2 rounded border border-amber-400 bg-white px-3 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100"
+        >
+          Buscar chegadas no ProDoctor
+        </button>
+      ) : (
+        <form
+          className="mt-2 flex flex-wrap items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void recuperar();
+          }}
+        >
+          <input
+            type="password"
+            inputMode="numeric"
+            autoFocus
+            placeholder="PIN do modo edição"
+            aria-label="PIN do modo edição"
+            value={pin}
+            onChange={(e) => setPin(e.target.value)}
+            className="w-44 rounded border border-amber-300 bg-white px-2 py-1 text-xs focus:border-amber-500 focus:outline-none"
+          />
+          <button
+            type="submit"
+            disabled={enviando || pin === ""}
+            className="rounded bg-amber-600 px-3 py-1 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+          >
+            {enviando ? "Buscando…" : "Buscar"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setAberto(false)}
+            className="text-xs underline"
+          >
+            cancelar
+          </button>
+          <span className="text-[11px] text-amber-800">
+            Usa 1 consulta à API do ProDoctor a cada 7 dias do período, uma
+            única vez.
+          </span>
+        </form>
+      )}
+
+      {retorno && (
+        <p
+          className={`mt-2 text-xs ${retorno.ok ? "text-emerald-800" : "text-red-700"}`}
+          role="status"
+        >
+          {retorno.texto}
+        </p>
+      )}
+    </div>
+  );
 }
 
 function formatarMin(valor: number | null | undefined): string {
