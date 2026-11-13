@@ -14,11 +14,10 @@
  *   do dia (≤ ~50) e hidratamos o rastreador em memória.
  * - Toda primeira aparição/transição é gravada no Firestore.
  *
- * Idempotência: a gravação usa transação. Se já existe doc com o MESMO
- * estagio, mantém o desdeEm antigo. Se não existe ou estagio mudou,
- * grava o novo. Isso evita race conditions entre múltiplas instâncias
- * serverless competindo para "primeiro" gravar — quem chegar primeiro
- * vira a fonte de verdade.
+ * Este arquivo cuida só da LEITURA. A gravação vive em
+ * lib/eventoEstagio.ts (registrarMudancaEstagio), que atualiza o estado
+ * atual e cria o evento de histórico na mesma transação — quem chegar
+ * primeiro vira a fonte de verdade, e as demais instâncias não duplicam.
  *
  * Custo (free tier do Firestore: 50k reads e 20k writes/dia):
  * - Reads: ~50 por cold start + ~1 por write idempotente.
@@ -162,59 +161,5 @@ export async function carregarEstadosDoDia(
     // eslint-disable-next-line no-console
     console.error("[firebase] erro ao carregar estadoAtual:", erro);
     return { ok: false, erro };
-  }
-}
-
-/**
- * Persiste o estado atual de um agendamento de forma IDEMPOTENTE:
- * - Se já existe doc com o MESMO estagio para este agendamentoId:
- *   NÃO sobrescreve. Mantém o desdeEm antigo (= primeira gravação ganha).
- * - Se não existe ou tem outro estagio: grava o novo.
- *
- * Isso resolve a race condition entre múltiplas instâncias serverless
- * tentando gravar "primeira aparição" do mesmo paciente — só uma vence,
- * as outras leem o que ela gravou.
- *
- * Fire-and-forget: falhas são logadas, não jogadas pra cima.
- */
-export async function salvarEstadoAtual(
-  agendamentoId: string,
-  estagio: EstagioPaciente,
-  desdeEm: Date,
-  data: string,
-): Promise<void> {
-  const fs = obterFirestore();
-  if (!fs) return;
-
-  const ref = fs.collection("estadoAtual").doc(agendamentoId);
-
-  try {
-    // Timeout de 6s envolvendo a transação inteira. É fire-and-forget
-    // (o /api/painel não espera), mas sem teto a transação podia pendurar
-    // recursos da lambda. A lógica de idempotência abaixo permanece
-    // idêntica — só ganhou o teto de tempo.
-    await comTimeout(
-      fs.runTransaction(async (tx) => {
-        const snap = await tx.get(ref);
-        if (snap.exists) {
-          const d = snap.data();
-          if (d?.estagio === estagio) {
-            // Já existe doc para este estágio — mantém o desdeEm antigo.
-            // Atualiza só `atualizadoEm` para auditoria (last seen).
-            tx.update(ref, { atualizadoEm: new Date() });
-            return;
-          }
-          // Estágio diferente: o paciente fez transição entre o último save
-          // e agora. Sobrescreve com o novo estagio + desdeEm.
-        }
-        // Novo doc OU transição real: grava normalmente.
-        tx.set(ref, { estagio, desdeEm, data, atualizadoEm: new Date() });
-      }),
-      6000,
-      "salvarEstadoAtual",
-    );
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error("[firebase] erro ao salvar estadoAtual:", err);
   }
 }

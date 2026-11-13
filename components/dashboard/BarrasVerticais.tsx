@@ -3,8 +3,7 @@
 /**
  * Gráfico de barras verticais. Usado para distribuição por hora do dia,
  * pacientes por dia, etc. A altura de cada barra é proporcional ao maior
- * valor da lista. Mostra o valor em cima da barra apenas quando há
- * espaço suficiente.
+ * valor da lista, com o valor escrito em cima de cada barra.
  */
 
 interface ItemBarras {
@@ -41,17 +40,20 @@ export default function BarrasVerticais({
       ) : (
         <div
           className="flex items-end gap-1 overflow-x-auto pb-1"
-          style={{ height: `${alturaMax + 24}px` }}
+          style={{ height: `${alturaMax + 44}px` }}
         >
-          {itens.map((item) => {
+          {itens.map((item, indice) => {
             const pct = max > 0 ? (item.valor / max) * 100 : 0;
             const altura = (pct / 100) * alturaMax;
             return (
               <div
-                key={item.rotulo}
-                className="flex min-w-[1.5rem] flex-1 flex-col items-center gap-1"
+                key={`${indice}-${item.rotulo}`}
+                className="flex min-w-[1.5rem] flex-1 flex-col items-center justify-end gap-1"
                 title={`${item.rotulo}: ${item.valor}`}
               >
+                <span className="text-[10px] tabular-nums text-slate-600">
+                  {item.valor > 0 ? item.valor : ""}
+                </span>
                 <div
                   className="w-full rounded-t transition-all"
                   style={{

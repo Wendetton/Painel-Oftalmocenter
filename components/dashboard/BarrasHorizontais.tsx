@@ -72,6 +72,8 @@ export default function BarrasHorizontais({
 }
 
 function formatarValor(v: number): string {
-  if (v < 10) return v.toFixed(1);
+  // Contagens (inteiros) aparecem sem casa decimal: "7 pac", não "7.0 pac".
+  if (Number.isInteger(v)) return v.toString();
+  if (v < 10) return v.toFixed(1).replace(".", ",");
   return Math.round(v).toString();
 }

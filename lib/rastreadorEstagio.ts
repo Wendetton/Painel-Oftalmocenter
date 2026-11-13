@@ -18,7 +18,7 @@
  * A persistência no Firestore vive em lib/estadoAtualPersistente.ts. O
  * rastreador em si não conhece esse detalhe — é responsabilidade do
  * caller (app/api/painel/route.ts) chamar hidratarEstados na primeira
- * vez e salvarEstadoAtual em cada transição/primeira aparição.
+ * vez e registrarMudancaEstagio em cada transição/primeira aparição.
  */
 
 import type { EstadoSalvo } from "./estadoAtualPersistente";
@@ -96,6 +96,23 @@ export function forcarEntrada(
   desdeEmMs: number,
 ): void {
   rastreador.set(agendamentoId, { estagio, desdeEm: desdeEmMs });
+}
+
+/**
+ * Ajusta o instante de entrada de um agendamento para o valor canônico
+ * do Firestore, SE a memória ainda estiver no mesmo estágio. Usado quando
+ * a gravação descobre que outra instância já tinha registrado a mudança
+ * antes: o cronômetro desta instância passa a bater com o das outras.
+ */
+export function alinharDesdeEm(
+  agendamentoId: string,
+  estagio: EstagioPaciente,
+  desdeEmMs: number,
+): void {
+  const entrada = rastreador.get(agendamentoId);
+  if (entrada && entrada.estagio === estagio) {
+    entrada.desdeEm = desdeEmMs;
+  }
 }
 
 /**

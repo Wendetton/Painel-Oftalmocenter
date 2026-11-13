@@ -1,91 +1,178 @@
 /**
- * Gravação de eventos de transição de estágio no Firestore (Fase A do
- * planejamento de analytics — espelho de eventos).
+ * Registro de mudanças de estágio no Firestore: estado atual do
+ * agendamento (cronômetro das TVs) + evento de histórico (dashboard).
  *
- * Cada vez que o servidor observa um paciente saindo do estágio X e
- * entrando no estágio Y, gravamos um documento na coleção `eventosEstagio`.
- * A partir desses eventos podemos calcular tempos por estágio, médias por
- * convênio/médico/dia, etc., sem depender da memória do servidor.
+ * As duas gravações acontecem numa ÚNICA transação, e é o Firestore — não
+ * a memória de cada instância do servidor — que decide se houve mudança:
  *
- * Decisões importantes:
+ *   - doc `estadoAtual/{agendamentoId}` já está no estágio informado
+ *     → nada é gravado (outra instância já registrou esta mudança).
+ *   - doc não existe ou está em outro estágio
+ *     → atualiza o estado atual E cria UM evento em `eventosEstagio`.
  *
- * 1. Fail-safe: se o Firestore estiver fora ou as credenciais ausentes,
- *    apenas logamos o erro — o painel não quebra. Continuamos polando o
- *    ProDoctor normalmente; só perdemos o registro daquela transição.
+ * Por que assim: o Vercel roda várias instâncias, cada uma com a sua
+ * memória. Antes, cada instância que notava a mudança gravava o seu
+ * próprio evento — 1 em cada 5 eventos era duplicata, e as "passagens" de
+ * poucos segundos entre duplicatas puxavam para baixo os tempos médios do
+ * dashboard. Com a transação, cada mudança real vira exatamente um evento.
  *
- * 2. Fire and forget: o handler do /api/painel não espera o write
- *    terminar. Se o Firestore estiver lento, não atrasa a resposta da
- *    API (que tem deadline implícito do polling de 5s).
+ * O que entra no evento além do que já existia:
+ *   - Chegada: a primeira vez que o agendamento aparece gera um evento
+ *     com `estagioAnterior: null`. Antes a chegada não era gravada e o
+ *     tempo de recepção simplesmente não existia no histórico.
+ *   - `chegada`: instante real em que a recepção marcou o comparecimento
+ *     no ProDoctor (vem da agenda; não custa chamada extra).
+ *   - `horaAgendada`: horário marcado, para medir pontualidade no futuro.
+ *   - `anteriorDesdeEm`: quando o paciente entrou no estágio que está
+ *     deixando — a duração do estágio fica auto-contida no evento.
  *
- * 3. Sem evento na "primeira aparição": quando o servidor reinicia (cold
- *    start no Vercel) o rastreador esquece o estado anterior e veria todos
- *    os pacientes "pela primeira vez". Para evitar duplicatas, só
- *    gravamos eventos quando o rastreador detecta TRANSIÇÃO real (o
- *    estágio anterior é diferente). Trade-off: perdemos a entrada
- *    inicial no estágio em que o paciente já estava no momento do cold
- *    start. Aceitável — cold start de manhã (clínica vazia) é o cenário
- *    comum, com perda zero.
+ * Custo no Firestore: 1 leitura + até 2 gravações por mudança real de
+ * estágio (igual a antes). Nenhuma chamada à API do ProDoctor.
  *
- * 4. Schema desnormalizado: gravamos nome do médico, nome do convênio,
- *    etc. junto de cada evento. Dashboards futuros não precisam fazer
- *    "join" — query simples já entrega tudo. Custa mais espaço mas é
- *    irrelevante no nosso volume (~30-50 eventos/dia × 365 dias = ~15k
- *    eventos/ano, muito abaixo dos 1 GB do plano grátis).
+ * Fail-safe: falhas são logadas e devolvem null — o painel nunca quebra
+ * por causa do histórico.
  */
 
-import { FieldValue } from "firebase-admin/firestore";
+import { FieldValue, Timestamp } from "firebase-admin/firestore";
 
 import { comTimeout } from "./comTimeout";
 import { obterFirestore } from "./firebase";
 import type { EstagioPaciente } from "./tipos";
 
-export interface EventoTransicaoEstagio {
+export interface MudancaEstagio {
   agendamentoId: string;
+  estagio: EstagioPaciente;
+  /** Instante em que o painel detectou o paciente neste estágio. */
+  detectadoEm: Date;
+  /**
+   * Estágio anterior segundo a memória da instância. Só é usado quando o
+   * Firestore não tem registro do agendamento (ex.: gravação anterior
+   * falhou); havendo registro, vale o do Firestore.
+   */
+  estagioAnteriorMemoria: EstagioPaciente | null;
+  /** "YYYY-MM-DD" no fuso de São Paulo, para consultas por período. */
+  data: string;
+  /** Instante real da chegada segundo o ProDoctor; null se desconhecido. */
+  chegada: Date | null;
+  /** Horário marcado do agendamento ("HH:mm"). */
+  horaAgendada: string | null;
   pacienteCodigo: number | null;
   pacienteNome: string;
   medicoCodigo: number | null;
   medicoNome: string;
   convenio: string | null;
-  estagioAnterior: EstagioPaciente | null;
-  estagioNovo: EstagioPaciente;
-  /** Momento da transição (server time). */
-  momento: Date;
-  /** "YYYY-MM-DD" no fuso de São Paulo, para queries por dia. */
-  data: string;
   tipoConsulta: boolean;
   tipoRetorno: boolean;
   tipoExame: boolean;
 }
 
-/**
- * Grava o evento no Firestore. Não joga erro — falhas são logadas e
- * a função simplesmente não retorna nada útil. Chamar com `void` para
- * não esperar.
- */
-export async function gravarEventoTransicao(
-  evento: EventoTransicaoEstagio,
-): Promise<void> {
-  const fs = obterFirestore();
-  if (!fs) return;
+export interface ResultadoMudanca {
+  /** false = o Firestore já estava neste estágio; nada foi gravado. */
+  gravou: boolean;
+  /** Instante canônico de entrada no estágio (para o cronômetro). */
+  desdeEmMs: number;
+}
 
-  try {
-    // O Firestore aceita Date diretamente — converte para Timestamp internamente.
-    // Adicionamos `criadoEm` (server timestamp) para auditar exatamente quando
-    // o write chegou, separado do `momento` lógico da transição.
-    //
-    // Timeout de 6s: é fire-and-forget (o /api/painel não espera), mas
-    // sem teto a Promise podia segurar recursos da lambda por ~182s se o
-    // canal travasse. Se estourar, o catch abaixo loga e seguimos.
-    await comTimeout(
-      fs.collection("eventosEstagio").add({
-        ...evento,
-        criadoEm: FieldValue.serverTimestamp(),
+function paraMs(valor: unknown): number | null {
+  if (valor instanceof Timestamp) return valor.toMillis();
+  if (valor instanceof Date) return valor.getTime();
+  if (typeof valor === "object" && valor !== null && "seconds" in valor) {
+    const s = (valor as { seconds: unknown }).seconds;
+    if (typeof s === "number" && Number.isFinite(s)) return s * 1000;
+  }
+  return null;
+}
+
+export async function registrarMudancaEstagio(
+  m: MudancaEstagio,
+): Promise<ResultadoMudanca | null> {
+  const fs = obterFirestore();
+  if (!fs) return null;
+
+  const refEstado = fs.collection("estadoAtual").doc(m.agendamentoId);
+  const detectadoMs = m.detectadoEm.getTime();
+
+  const tentar = (): Promise<ResultadoMudanca> =>
+    comTimeout(
+      fs.runTransaction(async (tx): Promise<ResultadoMudanca> => {
+        const snap = await tx.get(refEstado);
+
+        let anterior: EstagioPaciente | null = m.estagioAnteriorMemoria;
+        let anteriorDesdeMs: number | null = null;
+
+        if (snap.exists) {
+          const d = snap.data();
+          if (d?.estagio === m.estagio) {
+            // Outra instância já registrou esta mudança. Não grava nada;
+            // devolve o instante canônico para o cronômetro.
+            return {
+              gravou: false,
+              desdeEmMs: paraMs(d.desdeEm) ?? detectadoMs,
+            };
+          }
+          if (typeof d?.estagio === "string") {
+            anterior = d.estagio as EstagioPaciente;
+            anteriorDesdeMs = paraMs(d.desdeEm);
+          }
+        }
+
+        // Chegada na recepção: o momento do evento é a hora real marcada
+        // no ProDoctor, não a hora em que o painel percebeu. Nos demais
+        // casos, vale o instante da detecção.
+        const momento =
+          anterior === null && m.estagio === "RECEPCAO" && m.chegada
+            ? m.chegada
+            : m.detectadoEm;
+
+        tx.set(refEstado, {
+          estagio: m.estagio,
+          desdeEm: m.detectadoEm,
+          data: m.data,
+          atualizadoEm: new Date(),
+        });
+
+        tx.create(fs.collection("eventosEstagio").doc(), {
+          agendamentoId: m.agendamentoId,
+          pacienteCodigo: m.pacienteCodigo,
+          pacienteNome: m.pacienteNome,
+          medicoCodigo: m.medicoCodigo,
+          medicoNome: m.medicoNome,
+          convenio: m.convenio,
+          estagioAnterior: anterior,
+          estagioNovo: m.estagio,
+          momento,
+          data: m.data,
+          chegada: m.chegada,
+          horaAgendada: m.horaAgendada,
+          anteriorDesdeEm:
+            anteriorDesdeMs !== null ? new Date(anteriorDesdeMs) : null,
+          tipoConsulta: m.tipoConsulta,
+          tipoRetorno: m.tipoRetorno,
+          tipoExame: m.tipoExame,
+          criadoEm: FieldValue.serverTimestamp(),
+        });
+
+        return { gravou: true, desdeEmMs: detectadoMs };
       }),
-      6000,
-      "gravarEventoTransicao",
+      8000,
+      "registrarMudancaEstagio",
     );
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error("[firebase] Falha ao gravar evento de transição:", err);
+
+  // A transação é idempotente (se a 1ª tentativa gravou e só a resposta se
+  // perdeu, a 2ª encontra o estágio já registrado e não duplica), então
+  // repetir uma vez é seguro e evita perder o evento numa oscilação.
+  try {
+    return await tentar();
+  } catch {
+    try {
+      return await tentar();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[firebase] Falha ao registrar mudança de estágio de ${m.agendamentoId}:`,
+        err,
+      );
+      return null;
+    }
   }
 }

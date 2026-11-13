@@ -55,11 +55,15 @@ Marque as 5 como disponíveis para **Production, Preview e Development**.
 
 Os 3 painéis funcionam **sem o Firebase** — esta etapa é opcional.
 
-Quando configurado, o servidor passa a gravar no Firestore cada vez que
-um paciente troca de estágio (ex.: vai da Recepção para a Sala de
-Exames). Esses eventos viram a base de dados para o **dashboard de
-análise** que vamos construir depois (tempo médio na recepção,
-comparativo entre convênios, etc.).
+Quando configurado, o servidor passa a gravar no Firestore a chegada de
+cada paciente e cada troca de estágio (ex.: vai da Recepção para a Sala
+de Exames). Esses eventos são a base de dados do **dashboard de
+análise** em `/dashboard` (tempo de recepção, tempo total, comparativo
+entre convênios, etc.).
+
+O dashboard lê apenas esse histórico — não faz nenhuma chamada à API do
+ProDoctor. A hora de chegada usada nos cálculos é a `horaCompareceu`,
+que já vem na agenda do dia que os painéis consultam.
 
 **Como configurar (uma vez só, ~5 minutos):**
 

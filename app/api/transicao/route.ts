@@ -12,7 +12,7 @@
  * - O painel imediatamente após uma mutação bem-sucedida invalida o cache
  *   do servidor (próximo polling traz o estado novo). Aqui não bloqueamos
  *   nada — o ciclo de polling de 5s já vai refletir.
- * - Não chamamos o gravarEventoTransicao daqui: a transição vai virar um
+ * - Não gravamos evento de histórico daqui: a transição vai virar um
  *   evento natural no /api/painel quando o rastreador detectar a mudança.
  */
 
