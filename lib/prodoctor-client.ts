@@ -325,6 +325,31 @@ export async function buscarAgendamentosDoDia(
   return filtrarPorMedicos(agenda, codigosMedicos);
 }
 
+/**
+ * Agenda de um PERÍODO passado (datas "DD/MM/YYYY"), de todos os médicos
+ * do painel, em UMA chamada à ProDoctor. Sem cache: é usada só na
+ * recuperação manual do histórico (lib/chegadasHistoricas.ts), acionada
+ * por um botão protegido por PIN — nunca no ciclo das TVs.
+ */
+export async function buscarAgendaDoPeriodo(
+  dataInicial: string,
+  dataFinal: string,
+): Promise<AgendamentoProDoctor[]> {
+  const resposta = await chamar<RespostaAgendamentosProDoctor>(
+    "/api/v1/Agenda/BuscarPorStatusTipo",
+    {
+      method: "POST",
+      body: {
+        pagina: 1,
+        quantidade: 5000,
+        periodo: { dataInicial, dataFinal },
+        usuarios: MEDICOS_PAINEL.map((codigo) => ({ codigo })),
+      },
+    },
+  );
+  return resposta.payload?.agendamentos ?? [];
+}
+
 function filtrarPorMedicos(agenda: AgendaDoDia, codigosMedicos: number[]): AgendaDoDia {
   const pedidos = new Set(codigosMedicos);
   return {

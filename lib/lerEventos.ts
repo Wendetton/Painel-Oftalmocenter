@@ -14,6 +14,8 @@
 
 import { Timestamp } from "firebase-admin/firestore";
 
+import { carregarChegadasHistoricas } from "./chegadasHistoricas";
+import { dataYYYYMMDDBrasil } from "./configuracao";
 import { obterFirestore } from "./firebase";
 import type { EstagioPaciente } from "./tipos";
 
@@ -118,5 +120,74 @@ export async function buscarEventosPeriodo(
     })
     .filter((e): e is EventoBruto => e !== null);
 
+  // Eventos antigos não trazem a hora de chegada. Se ela já foi
+  // recuperada do ProDoctor (lib/chegadasHistoricas), junta aqui. Só
+  // consulta quando há evento sem chegada — período todo novo não lê nada.
+  if (eventos.some((e) => e.chegadaMs === null)) {
+    const chegadas = await carregarChegadasHistoricas(dataInicio, dataFim);
+    if (chegadas.size > 0) {
+      for (const e of eventos) {
+        if (e.chegadaMs === null) {
+          e.chegadaMs = chegadas.get(e.agendamentoId) ?? null;
+        }
+      }
+    }
+  }
+
   return { eventos, truncado: snap.size >= LIMITE_EVENTOS };
+}
+
+// ─── Cache em memória ────────────────────────────────────────────────────────
+//
+// Cada evento lido conta na cota diária do Firestore (a mesma que mantém
+// os cronômetros das TVs), e uma consulta de 30 dias lê alguns milhares.
+// Sem cache, trocar de filtro e voltar repetia a leitura inteira.
+//
+// - Período que inclui hoje: 1 minuto (os dados ainda estão mudando).
+// - Período só de dias passados: 10 minutos.
+
+const TTL_COM_HOJE_MS = 60_000;
+const TTL_PASSADO_MS = 10 * 60_000;
+const MAX_ENTRADAS = 12;
+
+const cache = new Map<string, { expiraEm: number; dados: EventosPeriodo }>();
+const emAndamento = new Map<string, Promise<EventosPeriodo>>();
+
+export async function buscarEventosComCache(
+  dataInicio: string,
+  dataFim: string,
+): Promise<EventosPeriodo> {
+  const chave = `${dataInicio}|${dataFim}`;
+
+  const guardado = cache.get(chave);
+  if (guardado && guardado.expiraEm > Date.now()) return guardado.dados;
+
+  // Duas abas pedindo o mesmo período ao mesmo tempo compartilham a leitura.
+  const pendente = emAndamento.get(chave);
+  if (pendente) return pendente;
+
+  const promessa = buscarEventosPeriodo(dataInicio, dataFim)
+    .then((dados) => {
+      const incluiHoje = dataFim >= dataYYYYMMDDBrasil();
+      cache.set(chave, {
+        dados,
+        expiraEm: Date.now() + (incluiHoje ? TTL_COM_HOJE_MS : TTL_PASSADO_MS),
+      });
+      if (cache.size > MAX_ENTRADAS) {
+        const maisAntiga = cache.keys().next().value;
+        if (maisAntiga !== undefined) cache.delete(maisAntiga);
+      }
+      return dados;
+    })
+    .finally(() => {
+      emAndamento.delete(chave);
+    });
+
+  emAndamento.set(chave, promessa);
+  return promessa;
+}
+
+/** Esvazia o cache (ex.: logo após recuperar chegadas do histórico). */
+export function limparCacheEventos(): void {
+  cache.clear();
 }
