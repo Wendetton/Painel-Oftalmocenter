@@ -78,7 +78,32 @@ const PRESETS: Preset[] = [
   },
 ];
 
+/**
+ * Aplica uma data digitada mantendo o período válido: campo apagado é
+ * ignorado, e se o início passar do fim (ou vice-versa) a outra ponta
+ * acompanha — assim nunca sai um período invertido para a API.
+ */
+function ajustar(
+  periodo: PeriodoFiltro,
+  campo: keyof PeriodoFiltro,
+  valor: string,
+): PeriodoFiltro | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(valor)) return null;
+  const novo = { ...periodo, [campo]: valor };
+  if (novo.dataInicio > novo.dataFim) {
+    if (campo === "dataInicio") novo.dataFim = valor;
+    else novo.dataInicio = valor;
+  }
+  return novo;
+}
+
 export default function Filtros({ periodo, onChange }: Props) {
+  const hoje = dataYYYYMMDDBrasil();
+  const aoDigitar = (campo: keyof PeriodoFiltro, valor: string): void => {
+    const novo = ajustar(periodo, campo, valor);
+    if (novo) onChange(novo);
+  };
+
   const presetAtivo = useMemo(() => {
     return PRESETS.find((p) => {
       const calc = p.calcular();
@@ -111,15 +136,19 @@ export default function Filtros({ periodo, onChange }: Props) {
       <div className="flex items-center gap-2 text-sm text-slate-700">
         <input
           type="date"
+          aria-label="Data inicial"
           value={periodo.dataInicio}
-          onChange={(e) => onChange({ ...periodo, dataInicio: e.target.value })}
+          max={hoje}
+          onChange={(e) => aoDigitar("dataInicio", e.target.value)}
           className="rounded border border-slate-300 bg-white px-2 py-1 text-sm tabular-nums focus:border-blue-500 focus:outline-none"
         />
         <span className="text-slate-400">até</span>
         <input
           type="date"
+          aria-label="Data final"
           value={periodo.dataFim}
-          onChange={(e) => onChange({ ...periodo, dataFim: e.target.value })}
+          max={hoje}
+          onChange={(e) => aoDigitar("dataFim", e.target.value)}
           className="rounded border border-slate-300 bg-white px-2 py-1 text-sm tabular-nums focus:border-blue-500 focus:outline-none"
         />
       </div>

@@ -17,11 +17,14 @@ import { Timestamp } from "firebase-admin/firestore";
 import { obterFirestore } from "./firebase";
 import type { EstagioPaciente } from "./tipos";
 
+/**
+ * Evento como o dashboard recebe. De propósito NÃO inclui nome nem código
+ * do paciente: o dashboard só mostra números agregados, então dado
+ * pessoal não precisa sair do servidor (e a resposta fica menor).
+ */
 export interface EventoBruto {
   id: string;
   agendamentoId: string;
-  pacienteCodigo: number | null;
-  pacienteNome: string;
   medicoCodigo: number | null;
   medicoNome: string;
   convenio: string | null;
@@ -31,15 +34,38 @@ export interface EventoBruto {
   momentoMs: number;
   /** "YYYY-MM-DD" no fuso de São Paulo. */
   data: string;
+  /**
+   * Instante real da chegada segundo o ProDoctor (epoch ms). null nos
+   * eventos gravados antes de o painel passar a registrar a chegada.
+   */
+  chegadaMs: number | null;
   tipoConsulta: boolean;
   tipoRetorno: boolean;
   tipoExame: boolean;
 }
 
+/** Teto de eventos por consulta (cada evento lido conta na cota do Firestore). */
+export const LIMITE_EVENTOS = 10_000;
+
+export interface EventosPeriodo {
+  eventos: EventoBruto[];
+  /** true = o período tem mais eventos que o teto; o resultado está incompleto. */
+  truncado: boolean;
+}
+
+function paraMs(valor: unknown): number | null {
+  if (valor instanceof Timestamp) return valor.toMillis();
+  if (typeof valor === "object" && valor !== null && "seconds" in valor) {
+    const s = (valor as { seconds: unknown }).seconds;
+    if (typeof s === "number" && Number.isFinite(s)) return s * 1000;
+  }
+  return null;
+}
+
 export async function buscarEventosPeriodo(
   dataInicio: string,
   dataFim: string,
-): Promise<EventoBruto[]> {
+): Promise<EventosPeriodo> {
   const fs = obterFirestore();
   if (!fs) {
     throw new Error(
@@ -58,28 +84,18 @@ export async function buscarEventosPeriodo(
     .where("data", ">=", dataInicio)
     .where("data", "<=", dataFim)
     .orderBy("data", "asc")
-    .limit(10_000)
+    .limit(LIMITE_EVENTOS)
     .get();
 
-  return snap.docs
+  const eventos = snap.docs
     .map((doc) => {
       const dados = doc.data();
-      const momento = dados.momento;
-      const momentoMs =
-        momento instanceof Timestamp
-          ? momento.toMillis()
-          : typeof momento === "object" && momento !== null && "seconds" in momento
-            ? (momento as { seconds: number }).seconds * 1000
-            : Number.NaN;
-
-      if (!Number.isFinite(momentoMs)) return null;
+      const momentoMs = paraMs(dados.momento);
+      if (momentoMs === null) return null;
 
       return {
         id: doc.id,
         agendamentoId: String(dados.agendamentoId ?? ""),
-        pacienteCodigo:
-          typeof dados.pacienteCodigo === "number" ? dados.pacienteCodigo : null,
-        pacienteNome: String(dados.pacienteNome ?? "(sem nome)"),
         medicoCodigo:
           typeof dados.medicoCodigo === "number" ? dados.medicoCodigo : null,
         medicoNome: String(dados.medicoNome ?? "—"),
@@ -94,10 +110,13 @@ export async function buscarEventosPeriodo(
         estagioNovo: dados.estagioNovo as EstagioPaciente,
         momentoMs,
         data: String(dados.data ?? ""),
+        chegadaMs: paraMs(dados.chegada),
         tipoConsulta: Boolean(dados.tipoConsulta),
         tipoRetorno: Boolean(dados.tipoRetorno),
         tipoExame: Boolean(dados.tipoExame),
       } satisfies EventoBruto;
     })
     .filter((e): e is EventoBruto => e !== null);
+
+  return { eventos, truncado: snap.size >= LIMITE_EVENTOS };
 }

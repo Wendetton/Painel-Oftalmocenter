@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 
 import { classificarEstagio } from "@/lib/classificador";
 import { CONFIG, dataYYYYMMDDBrasil } from "@/lib/configuracao";
@@ -6,11 +6,12 @@ import { resolverIdades } from "@/lib/idadesPacientes";
 import {
   carregarEstadosDoDia,
   consultarEstadoAtual,
-  salvarEstadoAtual,
 } from "@/lib/estadoAtualPersistente";
-import { gravarEventoTransicao } from "@/lib/eventoEstagio";
+import { registrarMudancaEstagio } from "@/lib/eventoEstagio";
+import { instanteDaChegada } from "@/lib/horaChegada";
 import { buscarAgendamentosDoDia } from "@/lib/prodoctor-client";
 import {
+  alinharDesdeEm,
   forcarEntrada,
   hidratarEstados,
   jaHidratadoPara,
@@ -136,9 +137,9 @@ export async function GET(req: Request): Promise<NextResponse<RespostaPainel>> {
       //   desdeEm de lá (Firestore = fonte de verdade entre instâncias).
       //   Isso fecha o gap quando uma instância "perde" o estado em
       //   memória mas o Firestore tem.
-      // - Em primeira aparição (real) OU transição: persistimos no
-      //   Firestore (lib/estadoAtualPersistente).
-      // - Em transição real: gravamos evento na coleção `eventosEstagio`.
+      // - Em primeira aparição (real) OU transição: registramos no
+      //   Firestore o estado atual + o evento de histórico, numa única
+      //   transação (lib/eventoEstagio).
       let estagioDesdeEm: string | null = null;
       if (estagio !== "AGENDADO" && estagio !== "FALTOU") {
         let resultado = registrarEstagio(agendamentoId, estagio);
@@ -163,32 +164,47 @@ export async function GET(req: Request): Promise<NextResponse<RespostaPainel>> {
         estagioDesdeEm = new Date(resultado.desdeEm).toISOString();
 
         if (resultado.primeiraAparicao || resultado.transicaoObservada) {
-          // Persiste o instante de entrada no estágio. Fire-and-forget.
-          void salvarEstadoAtual(
+          // Grava no Firestore, numa única transação, o estado atual
+          // (cronômetro) e o evento de histórico (dashboard). É o
+          // Firestore que decide se a mudança é nova — se outra instância
+          // já registrou, nada é duplicado (ver lib/eventoEstagio).
+          //
+          // `after` mantém a função viva até a gravação terminar, sem
+          // atrasar a resposta para a TV. Sem ele, o Vercel podia
+          // congelar a instância logo após responder e a gravação
+          // estourava o tempo (eventos perdidos).
+          const agoraMs = Date.now();
+          const chegadaMs = instanteDaChegada(
+            dataHoje,
+            estado?.horaCompareceu,
+            agoraMs,
+          );
+          const gravacao = registrarMudancaEstagio({
             agendamentoId,
             estagio,
-            new Date(resultado.desdeEm),
-            dataHoje,
-          );
-        }
-
-        if (resultado.transicaoObservada) {
-          // Evento de analytics. Fire-and-forget.
-          void gravarEventoTransicao({
-            agendamentoId,
+            detectadoEm: new Date(resultado.desdeEm),
+            estagioAnteriorMemoria: resultado.transicaoObservada
+              ? resultado.estagioAnterior
+              : null,
+            data: dataHoje,
+            chegada: chegadaMs !== null ? new Date(chegadaMs) : null,
+            horaAgendada: ag.hora ?? null,
             pacienteCodigo: codigoPaciente,
             pacienteNome: ag.paciente?.nome ?? "(sem nome)",
             medicoCodigo: ag.usuario?.codigo ?? null,
             medicoNome: ag.usuario?.nome ?? "—",
             convenio: ag.convenio?.nome ?? null,
-            estagioAnterior: resultado.estagioAnterior,
-            estagioNovo: estagio,
-            momento: new Date(resultado.desdeEm),
-            data: dataHoje,
             tipoConsulta: ag.tipoAgendamento?.consulta ?? false,
             tipoRetorno: ag.tipoAgendamento?.retorno ?? false,
             tipoExame: ag.tipoAgendamento?.exame ?? false,
+          }).then((r) => {
+            // Outra instância registrou primeiro: alinha o cronômetro
+            // desta instância com o instante canônico.
+            if (r && !r.gravou) {
+              alinharDesdeEm(agendamentoId, estagio, r.desdeEmMs);
+            }
           });
+          after(gravacao);
         }
       }
 
