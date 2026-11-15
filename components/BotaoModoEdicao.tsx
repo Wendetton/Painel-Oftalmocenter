@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 interface Props {
   ligado: boolean;
@@ -116,7 +117,9 @@ function ModalPin({
     setEnviando(false);
   };
 
-  return (
+  // Portal no <body>: o backdrop-blur do header prende elementos `fixed`
+  // dentro dele (o modal ficava no topo em vez de no centro da tela).
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4"
       onClick={onCancelar}
@@ -173,7 +176,8 @@ function ModalPin({
           </button>
         </div>
       </form>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
