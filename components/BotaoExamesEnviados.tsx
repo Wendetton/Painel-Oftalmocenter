@@ -13,6 +13,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { corMedico, medicosComEyenote } from "@/lib/configuracao";
 import {
@@ -137,9 +138,12 @@ function ModalExamesEnviados({
     }
   };
 
-  return (
+  // Portal no <body>: o header do painel usa backdrop-blur, o que prende
+  // elementos `fixed` dentro dele — o modal ficava espremido no topo da
+  // página em vez de centralizado na tela.
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/50 px-4 sm:items-center"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
       onClick={!ocupado ? onFechar : undefined}
       role="dialog"
       aria-modal="true"
@@ -147,7 +151,7 @@ function ModalExamesEnviados({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl"
+        className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
       >
         <header className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
           <div>
@@ -318,7 +322,8 @@ function ModalExamesEnviados({
           </button>
         </footer>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
