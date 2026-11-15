@@ -2,10 +2,8 @@
 
 /**
  * Toca um beep sempre que um agendamento ENTRA num estágio que esta TV
- * monitora. Cada painel passa a sua lista de estágios alvo:
- *   /recepcao    → ["RECEPCAO", "DILATACAO"]
- *   /exames      → ["SALA_EXAMES", "DILATACAO"]
- *   /consultorio → ["PRONTO_MEDICO"]
+ * monitora. O painel passa a sua lista de estágios alvo:
+ *   /exames → ["SALA_EXAMES", "DILATACAO"]
  *
  * Detecção: comparamos o estágio anterior de cada agendamento (snapshot
  * do polling anterior) com o atual. Se passou para um dos estágios alvo

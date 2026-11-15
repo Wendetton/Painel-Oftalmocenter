@@ -2,22 +2,16 @@ import Link from "next/link";
 
 const PAINEIS = [
   {
-    href: "/recepcao",
-    titulo: "Recepção",
-    descricao: "Pacientes em recepção e em dilatação.",
-    cor: "from-rose-50 to-rose-100 border-rose-200",
-  },
-  {
     href: "/exames",
     titulo: "Sala de exames",
     descricao: "Pacientes em exame e em dilatação.",
     cor: "from-amber-50 to-amber-100 border-amber-200",
   },
   {
-    href: "/consultorio",
-    titulo: "Consultório",
-    descricao: "Pacientes prontos para o médico.",
-    cor: "from-orange-50 to-orange-100 border-orange-200",
+    href: "/dashboard",
+    titulo: "Dashboard",
+    descricao: "Análise de tempos de espera e atendimento.",
+    cor: "from-sky-50 to-sky-100 border-sky-200",
   },
 ];
 
@@ -32,12 +26,13 @@ export default function HomePage() {
           Escolha o painel para abrir nesta tela
         </h1>
         <p className="max-w-2xl text-base text-slate-600">
-          Cada TV da clínica deve abrir uma URL específica e permanecer nela.
-          Os painéis atualizam sozinhos a partir do ProDoctor.
+          A TV da sala de exames deve ficar fixa no painel ao vivo, que
+          atualiza sozinho a partir do ProDoctor. O dashboard mostra o
+          histórico de tempos.
         </p>
       </header>
 
-      <section className="grid gap-4 sm:grid-cols-3">
+      <section className="grid gap-4 sm:grid-cols-2">
         {PAINEIS.map((painel) => (
           <Link
             key={painel.href}
@@ -56,8 +51,7 @@ export default function HomePage() {
       </section>
 
       <footer className="mt-auto border-t border-slate-200 pt-6 text-xs text-slate-500">
-        Cada TV deve ficar fixa em uma das 3 URLs acima. Os painéis
-        atualizam sozinhos.
+        Os painéis de Recepção e Consultório foram desativados.
       </footer>
     </main>
   );
