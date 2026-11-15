@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * Layout compartilhado entre os 3 painéis (Recepção, Sala de Exames,
- * Consultório). Estilo "premium claro" com tipografia ampliada para TV.
+ * Layout do painel ao vivo (hoje só a Sala de Exames; Recepção e
+ * Consultório foram desativados). Estilo "premium claro" com tipografia
+ * ampliada para TV.
  *
  * Header em UMA linha só: título à esquerda + controles à direita
  * (métricas em popover de hover, beep, cadeado, seletor de médicos).
