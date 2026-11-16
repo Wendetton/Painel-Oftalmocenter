@@ -3,10 +3,11 @@
 Painel operacional em tempo real da Oftalmocenter, alimentado pelas
 checkboxes de status que a equipe já usa no ProDoctor.
 
-> **Status atual:** Fase 1 (Fundação invisível) concluída. As rotas que falam
-> com a API do ProDoctor já existem e classificam os pacientes em estágios.
-> A interface visível dos painéis (Recepção, Sala de Exames, Consultório)
-> ainda será construída nas Fases 2-4.
+> **Em uso hoje:** o painel ao vivo da **Sala de Exames** (`/exames`) e o
+> **dashboard de análise** (`/dashboard`). Os painéis de Recepção
+> (`/recepcao`) e Consultório (`/consultorio`) foram **desativados** para
+> não consumir a cota da API do ProDoctor — essas URLs agora redirecionam
+> para a página inicial.
 
 ---
 
@@ -53,7 +54,7 @@ Marque as 5 como disponíveis para **Production, Preview e Development**.
 
 ### 3.1 (Opcional) Conectar o Firebase para guardar histórico
 
-Os 3 painéis funcionam **sem o Firebase** — esta etapa é opcional.
+O painel funciona **sem o Firebase** — esta etapa é opcional.
 
 Quando configurado, o servidor passa a gravar no Firestore a chegada de
 cada paciente e cada troca de estágio (ex.: vai da Recepção para a Sala
@@ -171,12 +172,8 @@ Depois do deploy, o Vercel te dá uma URL no formato
 
 ### Teste 1: a página inicial abre
 
-Acesse a URL. Você deve ver uma tela com 3 cards:
-**Recepção / Sala de exames / Consultório**.
-
-> Os 3 cards ainda **não levam a lugar nenhum visível** — eles vão para as
-> URLs dos painéis, que começam a ser construídas na Fase 2. É esperado que
-> você veja "404" se clicar neles. A Fase 1 só monta o "encanamento".
+Acesse a URL. Você deve ver uma tela com 2 cards:
+**Sala de exames / Dashboard**.
 
 ### Teste 2: a lista de médicos vem do ProDoctor
 
@@ -229,13 +226,9 @@ agenda real do dia para validar.
 - Trata erros e quedas da API com elegância (não trava, devolve "fonte
   offline").
 
-### 🚧 Vai aparecer nas próximas fases
-- **Fase 2:** página `/recepcao` que mostra os pacientes em lista bruta,
-  atualizando sozinha a cada 10 segundos. Sem decoração.
-- **Fase 3:** mesma página da Fase 2, mas com cards bonitos, cores do
-  ProDoctor, cronômetros e métricas.
-- **Fase 4:** páginas `/exames` e `/consultorio` com a mesma estrutura.
-- **Fase 5:** ajustes finos com a equipe usando.
+### 🚫 Desativado
+- Painéis `/recepcao` e `/consultorio`: não são mais usados. As URLs
+  redirecionam para a página inicial, que não consulta o ProDoctor.
 
 ---
 
