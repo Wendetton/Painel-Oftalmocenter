@@ -210,3 +210,40 @@ test("sem chegada, paciente devolvido à recepção não vira 'tempo de recepç�
   const r = calcularResumo(reconstruirTrajetorias(eventos));
   assert.equal(r.recepcao, null);
 });
+
+test("segundo agendamento do mesmo paciente no dia não conta como outro paciente", () => {
+  const c = min(0);
+  const eventos = [
+    // agendamento que andou
+    ev("2-09/11/2026-08:11-500", null, "RECEPCAO", c, { chegadaMs: c }),
+    ev("2-09/11/2026-08:11-500", "RECEPCAO", "SALA_EXAMES", min(10), { chegadaMs: c }),
+    ev("2-09/11/2026-08:11-500", "SALA_EXAMES", "ATENDIDO", min(30), { chegadaMs: c }),
+    // segundo horário do mesmo paciente: só marcado como chegou
+    ev("2-09/11/2026-10:01-500", null, "RECEPCAO", c, { chegadaMs: c }),
+    // lançamento sem código de paciente, mesma chegada e médico
+    ev("2-09/11/2026-08:12-x", null, "RECEPCAO", c, { chegadaMs: c }),
+    // outro paciente, ainda aguardando, com dois horários: conta 1
+    ev("2-09/11/2026-09:00-600", null, "RECEPCAO", min(5), { chegadaMs: min(5) }),
+    ev("2-09/11/2026-11:00-600", null, "RECEPCAO", min(5), { chegadaMs: min(5) }),
+    // sem código, chegada própria: é mantido
+    ev("2-09/11/2026-09:30-x", null, "RECEPCAO", min(20), { chegadaMs: min(20) }),
+  ];
+  const ts = reconstruirTrajetorias(eventos);
+  assert.equal(ts.length, 3);
+  const r = calcularResumo(ts);
+  assert.equal(r.pacientesTotais, 3);
+  assert.equal(r.pacientesAtendidos, 1);
+});
+
+test("recepção conta só a primeira espera, não a volta após o atendimento", () => {
+  const c = min(0);
+  const eventos = [
+    ev("p", null, "RECEPCAO", c, { chegadaMs: c }),
+    ev("p", "RECEPCAO", "SALA_EXAMES", min(12), { chegadaMs: c }),
+    ev("p", "SALA_EXAMES", "ATENDIDO", min(30), { chegadaMs: c }),
+    ev("p", "ATENDIDO", "RECEPCAO", min(40), { chegadaMs: c }),
+    ev("p", "RECEPCAO", "ATENDIDO", min(76), { chegadaMs: c }),
+  ];
+  const r = calcularResumo(reconstruirTrajetorias(eventos));
+  assert.equal(r.recepcao.mediana, 12);
+});
