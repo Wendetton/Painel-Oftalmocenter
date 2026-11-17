@@ -22,13 +22,18 @@ const TOLERANCIA_FUTURO_MS = 2 * 60_000;
 /** Chegada mais antiga que isso não é do expediente de hoje. */
 const IDADE_MAXIMA_MS = 16 * 60 * 60_000;
 
-export function instanteDaChegada(
+/**
+ * "HH:mm" (ou "HH:mm:ss") de um dia "YYYY-MM-DD" → instante (epoch ms) no
+ * fuso da clínica. null se a hora for ausente ou ilegível. Não valida se
+ * o instante faz sentido em relação a "agora" — serve também para dias
+ * passados (recuperação do histórico).
+ */
+export function instanteNoDia(
   dataYYYYMMDD: string,
-  horaCompareceu: string | null | undefined,
-  agoraMs: number,
+  hora: string | null | undefined,
 ): number | null {
-  if (!horaCompareceu) return null;
-  const m = horaCompareceu.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!hora) return null;
+  const m = hora.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
   if (!m) return null;
 
   const hh = Number(m[1]);
@@ -40,7 +45,16 @@ export function instanteDaChegada(
   const ms = Date.parse(
     `${dataYYYYMMDD}T${pad(hh)}:${pad(mm)}:${pad(ss)}${FUSO_CLINICA}`,
   );
-  if (!Number.isFinite(ms)) return null;
+  return Number.isFinite(ms) ? ms : null;
+}
+
+export function instanteDaChegada(
+  dataYYYYMMDD: string,
+  horaCompareceu: string | null | undefined,
+  agoraMs: number,
+): number | null {
+  const ms = instanteNoDia(dataYYYYMMDD, horaCompareceu);
+  if (ms === null) return null;
   if (ms > agoraMs + TOLERANCIA_FUTURO_MS) return null;
   if (agoraMs - ms > IDADE_MAXIMA_MS) return null;
 

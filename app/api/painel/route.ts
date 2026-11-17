@@ -1,5 +1,6 @@
 import { after, NextResponse } from "next/server";
 
+import { idDoAgendamento } from "@/lib/agendamentoId";
 import { classificarEstagio } from "@/lib/classificador";
 import { CONFIG, dataYYYYMMDDBrasil } from "@/lib/configuracao";
 import { resolverIdades } from "@/lib/idadesPacientes";
@@ -123,7 +124,7 @@ export async function GET(req: Request): Promise<NextResponse<RespostaPainel>> {
       const idade =
         codigoPaciente !== null ? (idades.get(codigoPaciente) ?? null) : null;
       const estagio = classificarEstagio(estado);
-      const agendamentoId = `${ag.usuario?.codigo ?? "x"}-${ag.data ?? "x"}-${ag.hora ?? "x"}-${codigoPaciente ?? "x"}`;
+      const agendamentoId = idDoAgendamento(ag);
       idsAtivos.add(agendamentoId);
 
       // AGENDADO e FALTOU não têm cronômetro — não passam pelo rastreador.

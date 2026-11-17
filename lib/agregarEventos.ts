@@ -54,6 +54,13 @@ export interface TrajetoriaPaciente {
    * terminou o dia como ATENDIDO.
    */
   tempoTotalMin: number | null;
+  /**
+   * true = o único registro é a chegada na recepção (o agendamento foi
+   * marcado como "compareceu" e não andou mais). Pode ser um paciente
+   * ainda aguardando — ou um segundo agendamento do mesmo paciente no
+   * dia, que o ProDoctor marca junto (ver removerAgendamentosRepetidos).
+   */
+  soChegada: boolean;
   tipoConsulta: boolean;
   tipoRetorno: boolean;
   tipoExame: boolean;
@@ -157,13 +164,82 @@ export function reconstruirTrajetorias(
       chegadaMs,
       inicioMs,
       tempoTotalMin,
+      soChegada:
+        lista.length === 1 &&
+        primeiro.estagioAnterior === null &&
+        primeiro.estagioNovo === "RECEPCAO",
       tipoConsulta: primeiro.tipoConsulta,
       tipoRetorno: primeiro.tipoRetorno,
       tipoExame: primeiro.tipoExame,
     });
   }
 
-  return trajetorias;
+  return removerAgendamentosRepetidos(trajetorias);
+}
+
+/** Código do paciente embutido no agendamentoId (último trecho); null se ausente. */
+function pacienteDoAgendamento(agendamentoId: string): string | null {
+  const codigo = agendamentoId.slice(agendamentoId.lastIndexOf("-") + 1);
+  return codigo === "" || codigo === "x" ? null : codigo;
+}
+
+/**
+ * Um paciente pode ter mais de um agendamento no mesmo dia (ex.: consulta
+ * + horário de exame). A recepção marca "compareceu" em todos, mas o
+ * paciente só percorre o fluxo em um — os outros ficam parados na chegada
+ * para sempre. Contá-los inflava "pacientes do período" e derrubava o
+ * percentual de atendidos.
+ *
+ * Regra: cada paciente conta uma vez por dia.
+ * - Paciente com código: se algum agendamento dele andou no fluxo, os que
+ *   ficaram só na chegada são descartados; se nenhum andou (ainda está
+ *   aguardando), fica um só.
+ * - Agendamento sem código de paciente parado na chegada: é descartado
+ *   quando há outro agendamento do mesmo médico com a mesma hora de
+ *   chegada (é o mesmo comparecimento lançado duas vezes).
+ */
+function removerAgendamentosRepetidos(
+  trajetorias: TrajetoriaPaciente[],
+): TrajetoriaPaciente[] {
+  const andouNoDia = new Set<string>();
+  for (const t of trajetorias) {
+    const paciente = pacienteDoAgendamento(t.agendamentoId);
+    if (paciente !== null && !t.soChegada) andouNoDia.add(`${t.data}|${paciente}`);
+  }
+
+  const jaContado = new Set<string>();
+  const comCodigo: TrajetoriaPaciente[] = [];
+  const semCodigoParados: TrajetoriaPaciente[] = [];
+
+  for (const t of trajetorias) {
+    const paciente = pacienteDoAgendamento(t.agendamentoId);
+    if (paciente === null) {
+      if (t.soChegada) semCodigoParados.push(t);
+      else comCodigo.push(t);
+      continue;
+    }
+    if (!t.soChegada) {
+      comCodigo.push(t);
+      continue;
+    }
+    const chave = `${t.data}|${paciente}`;
+    if (andouNoDia.has(chave) || jaContado.has(chave)) continue;
+    jaContado.add(chave);
+    comCodigo.push(t);
+  }
+
+  const chegadasConhecidas = new Set(
+    comCodigo
+      .filter((t) => t.chegadaMs !== null)
+      .map((t) => `${t.data}|${t.medicoCodigo}|${t.chegadaMs}`),
+  );
+  const semCodigoMantidos = semCodigoParados.filter(
+    (t) =>
+      t.chegadaMs === null ||
+      !chegadasConhecidas.has(`${t.data}|${t.medicoCodigo}|${t.chegadaMs}`),
+  );
+
+  return [...comCodigo, ...semCodigoMantidos];
 }
 
 // ─── Estatística ──────────────────────────────────────────────────────────────
@@ -217,6 +293,17 @@ export function minutosNoEstagio(
   return soma > 0 ? soma : null;
 }
 
+/**
+ * Espera na recepção: só a PRIMEIRA passagem, da chegada até o paciente
+ * ser chamado. Voltas à recepção depois (ex.: "atendido" desmarcado e
+ * marcado de novo) não são espera de recepção e não entram.
+ */
+export function minutosDeRecepcao(t: TrajetoriaPaciente): number | null {
+  const primeira = t.estadias[0];
+  if (!primeira || primeira.estagio !== "RECEPCAO") return null;
+  return primeira.durMin !== null && primeira.durMin > 0 ? primeira.durMin : null;
+}
+
 function estatisticaDoEstagio(
   trajetorias: TrajetoriaPaciente[],
   estagio: EstagioPaciente,
@@ -227,7 +314,8 @@ function estatisticaDoEstagio(
     // as únicas passagens registradas seriam de pacientes DEVOLVIDOS à
     // recepção — casos atípicos que não representam a espera real.
     if (estagio === "RECEPCAO" && t.chegadaMs === null) continue;
-    const m = minutosNoEstagio(t, estagio);
+    const m =
+      estagio === "RECEPCAO" ? minutosDeRecepcao(t) : minutosNoEstagio(t, estagio);
     if (m !== null) valores.push(m);
   }
   return estatistica(valores);
@@ -240,6 +328,8 @@ export interface ResumoGeral {
   pacientesAtendidos: number;
   /** Pacientes com a hora real de chegada registrada. */
   pacientesComChegada: number;
+  /** Primeiro dia ("YYYY-MM-DD") do período com chegada registrada. */
+  chegadaDesde: string | null;
   /** Tempo do início ao atendimento concluído. */
   tempoTotal: Estatistica | null;
   /**
@@ -255,9 +345,19 @@ export interface ResumoGeral {
 }
 
 /**
- * Tempos totais do período. Se algum paciente tem chegada registrada,
- * usa SÓ esses (misturar as duas réguas daria um número sem significado);
- * senão cai para o primeiro movimento.
+ * Um "tempo típico" só é mostrado com pelo menos esta quantidade de
+ * pacientes. Mediana de 1 ou 2 pacientes não representa a clínica — é só
+ * o tempo daquele paciente — e mostrá-la como se fosse o resultado do
+ * período engana.
+ */
+export const AMOSTRA_MINIMA = 5;
+
+/**
+ * Tempos totais do período, sem misturar réguas:
+ * - se há pacientes suficientes com chegada registrada, usa SÓ esses
+ *   (tempo real, da chegada ao atendimento);
+ * - senão, usa os que não têm chegada, contando do primeiro movimento
+ *   (saída da recepção) — e o dashboard diz isso na tela.
  */
 function temposTotais(trajetorias: TrajetoriaPaciente[]): {
   itens: { t: TrajetoriaPaciente; min: number }[];
@@ -265,10 +365,13 @@ function temposTotais(trajetorias: TrajetoriaPaciente[]): {
 } {
   const concluidas = trajetorias.filter((t) => t.tempoTotalMin !== null);
   const comChegada = concluidas.filter((t) => t.chegadaMs !== null);
-  const base = comChegada.length > 0 ? comChegada : concluidas;
+  const semChegada = concluidas.filter((t) => t.chegadaMs === null);
+  const usarChegada =
+    comChegada.length >= AMOSTRA_MINIMA || semChegada.length === 0;
+  const base = usarChegada ? comChegada : semChegada;
   return {
     itens: base.map((t) => ({ t, min: t.tempoTotalMin ?? 0 })),
-    desdeChegada: comChegada.length > 0,
+    desdeChegada: usarChegada,
   };
 }
 
@@ -280,6 +383,12 @@ export function calcularResumo(trajetorias: TrajetoriaPaciente[]): ResumoGeral {
       t.estadias.some((e) => e.estagio === "ATENDIDO"),
     ).length,
     pacientesComChegada: trajetorias.filter((t) => t.chegadaMs !== null).length,
+    chegadaDesde: trajetorias
+      .filter((t) => t.chegadaMs !== null)
+      .reduce<string | null>(
+        (menor, t) => (menor === null || t.data < menor ? t.data : menor),
+        null,
+      ),
     tempoTotal: estatistica(totais.itens.map((i) => i.min)),
     tempoTotalDesdeChegada: totais.desdeChegada,
     recepcao: estatisticaDoEstagio(trajetorias, "RECEPCAO"),
@@ -352,10 +461,7 @@ function rankingPorConvenio(
       (i): i is { rotulo: string; est: Estatistica } => i.est !== null,
     );
 
-  // Se nenhum convênio atinge a amostra mínima (período curto), mostra
-  // todos em vez de um gráfico vazio.
-  const suficientes = todos.filter((i) => i.est.n >= AMOSTRA_MINIMA_CONVENIO);
-  const base = suficientes.length > 0 ? suficientes : todos;
+  const base = todos.filter((i) => i.est.n >= AMOSTRA_MINIMA_CONVENIO);
 
   return base
     .map(({ rotulo, est }) => ({
@@ -390,7 +496,7 @@ export function tempoRecepcaoPorConvenio(
   const amostras: { convenio: string | null; min: number }[] = [];
   for (const t of trajetorias) {
     if (t.chegadaMs === null) continue; // ver estatisticaDoEstagio
-    const min = minutosNoEstagio(t, "RECEPCAO");
+    const min = minutosDeRecepcao(t);
     if (min !== null) amostras.push({ convenio: t.convenio, min });
   }
   return rankingPorConvenio(amostras);

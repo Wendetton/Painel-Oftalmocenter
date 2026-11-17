@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  AMOSTRA_MINIMA,
   calcularResumo,
   estatistica,
   pacientesPorDia,
@@ -91,7 +92,7 @@ test("histórico antigo (sem chegada): recepção não é inventada", () => {
   assert.equal(r.tempoTotalDesdeChegada, false);
 });
 
-test("período misto: tempo total usa só quem tem chegada registrada", () => {
+test("período misto com poucos pacientes medidos: não troca o total por 1 paciente", () => {
   const chegada = min(0);
   const eventos = [
     ev("antigo", "RECEPCAO", "SALA_EXAMES", min(0)),
@@ -100,8 +101,51 @@ test("período misto: tempo total usa só quem tem chegada registrada", () => {
     ev("novo", "RECEPCAO", "ATENDIDO", min(50), { chegadaMs: chegada }),
   ];
   const r = calcularResumo(reconstruirTrajetorias(eventos));
+  // 1 paciente com chegada é pouco: o total segue a régua antiga, e diz isso.
+  assert.equal(r.tempoTotalDesdeChegada, false);
   assert.equal(r.tempoTotal.n, 1);
+  assert.equal(r.tempoTotal.mediana, 10);
+  // A recepção desse 1 paciente existe, mas com n=1 a tela não a mostra.
+  assert.equal(r.recepcao.n, 1);
+  assert.ok(r.recepcao.n < AMOSTRA_MINIMA);
+  assert.equal(r.chegadaDesde, "2026-11-09");
+});
+
+test("período misto com amostra suficiente: total usa só quem tem chegada", () => {
+  const eventos = [
+    ev("antigo", "RECEPCAO", "SALA_EXAMES", min(0)),
+    ev("antigo", "SALA_EXAMES", "ATENDIDO", min(10)),
+  ];
+  for (let i = 0; i < AMOSTRA_MINIMA; i += 1) {
+    eventos.push(ev(`n${i}`, null, "RECEPCAO", min(0), { chegadaMs: min(0) }));
+    eventos.push(ev(`n${i}`, "RECEPCAO", "ATENDIDO", min(50), { chegadaMs: min(0) }));
+  }
+  const r = calcularResumo(reconstruirTrajetorias(eventos));
+  assert.equal(r.tempoTotalDesdeChegada, true);
+  assert.equal(r.tempoTotal.n, AMOSTRA_MINIMA);
   assert.equal(r.tempoTotal.mediana, 50);
+});
+
+test("chegada recuperada do histórico: evento antigo ganha tempo de recepção", () => {
+  // Evento no formato antigo (saída da recepção), com a chegada vinda do ProDoctor.
+  const eventos = [
+    ev("h", "RECEPCAO", "SALA_EXAMES", min(12), { chegadaMs: min(0) }),
+    ev("h", "SALA_EXAMES", "ATENDIDO", min(30), { chegadaMs: min(0) }),
+  ];
+  const [t] = reconstruirTrajetorias(eventos);
+  assert.equal(t.estadias[0].estagio, "RECEPCAO");
+  assert.equal(t.estadias[0].durMin, 12);
+  assert.equal(t.tempoTotalMin, 30);
+});
+
+test("chegada incoerente (depois do primeiro movimento) é descartada", () => {
+  const eventos = [
+    ev("i", "RECEPCAO", "SALA_EXAMES", min(0), { chegadaMs: min(40) }),
+    ev("i", "SALA_EXAMES", "ATENDIDO", min(10), { chegadaMs: min(40) }),
+  ];
+  const [t] = reconstruirTrajetorias(eventos);
+  assert.equal(t.chegadaMs, null);
+  assert.equal(t.tempoTotalMin, 10);
 });
 
 test("primeiro evento no meio do fluxo não vira tempo de recepção", () => {
@@ -165,4 +209,41 @@ test("sem chegada, paciente devolvido à recepção não vira 'tempo de recepç�
   ];
   const r = calcularResumo(reconstruirTrajetorias(eventos));
   assert.equal(r.recepcao, null);
+});
+
+test("segundo agendamento do mesmo paciente no dia não conta como outro paciente", () => {
+  const c = min(0);
+  const eventos = [
+    // agendamento que andou
+    ev("2-09/11/2026-08:11-500", null, "RECEPCAO", c, { chegadaMs: c }),
+    ev("2-09/11/2026-08:11-500", "RECEPCAO", "SALA_EXAMES", min(10), { chegadaMs: c }),
+    ev("2-09/11/2026-08:11-500", "SALA_EXAMES", "ATENDIDO", min(30), { chegadaMs: c }),
+    // segundo horário do mesmo paciente: só marcado como chegou
+    ev("2-09/11/2026-10:01-500", null, "RECEPCAO", c, { chegadaMs: c }),
+    // lançamento sem código de paciente, mesma chegada e médico
+    ev("2-09/11/2026-08:12-x", null, "RECEPCAO", c, { chegadaMs: c }),
+    // outro paciente, ainda aguardando, com dois horários: conta 1
+    ev("2-09/11/2026-09:00-600", null, "RECEPCAO", min(5), { chegadaMs: min(5) }),
+    ev("2-09/11/2026-11:00-600", null, "RECEPCAO", min(5), { chegadaMs: min(5) }),
+    // sem código, chegada própria: é mantido
+    ev("2-09/11/2026-09:30-x", null, "RECEPCAO", min(20), { chegadaMs: min(20) }),
+  ];
+  const ts = reconstruirTrajetorias(eventos);
+  assert.equal(ts.length, 3);
+  const r = calcularResumo(ts);
+  assert.equal(r.pacientesTotais, 3);
+  assert.equal(r.pacientesAtendidos, 1);
+});
+
+test("recepção conta só a primeira espera, não a volta após o atendimento", () => {
+  const c = min(0);
+  const eventos = [
+    ev("p", null, "RECEPCAO", c, { chegadaMs: c }),
+    ev("p", "RECEPCAO", "SALA_EXAMES", min(12), { chegadaMs: c }),
+    ev("p", "SALA_EXAMES", "ATENDIDO", min(30), { chegadaMs: c }),
+    ev("p", "ATENDIDO", "RECEPCAO", min(40), { chegadaMs: c }),
+    ev("p", "RECEPCAO", "ATENDIDO", min(76), { chegadaMs: c }),
+  ];
+  const r = calcularResumo(reconstruirTrajetorias(eventos));
+  assert.equal(r.recepcao.mediana, 12);
 });
